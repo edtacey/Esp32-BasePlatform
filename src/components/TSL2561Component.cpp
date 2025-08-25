@@ -5,8 +5,8 @@
 
 #include "TSL2561Component.h"
 
-TSL2561Component::TSL2561Component(const String& id, const String& name)
-    : BaseComponent(id, "TSL2561", name)
+TSL2561Component::TSL2561Component(const String& id, const String& name, ConfigStorage& storage, Orchestrator* orchestrator)
+    : BaseComponent(id, "TSL2561", name, storage, orchestrator)
 {
     log(Logger::DEBUG, "TSL2561Component created");
 }

@@ -14,6 +14,10 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "../utils/Logger.h"
+#include "../storage/ConfigStorage.h"
+
+// Forward declaration
+class Orchestrator;
 
 /**
  * @brief Component execution states
@@ -59,6 +63,12 @@ protected:
     uint32_t m_lastExecutionMs = 0;
     uint32_t m_executionCount = 0;
     uint32_t m_errorCount = 0;
+    
+    // Storage reference
+    ConfigStorage& m_storage;
+    
+    // Orchestrator reference for schedule notifications (optional)
+    Orchestrator* m_orchestrator;
 
 public:
     /**
@@ -66,8 +76,10 @@ public:
      * @param id Unique component identifier
      * @param type Component type string
      * @param name Human-readable component name
+     * @param storage Reference to ConfigStorage instance
+     * @param orchestrator Reference to orchestrator for schedule notifications
      */
-    BaseComponent(const String& id, const String& type, const String& name);
+    BaseComponent(const String& id, const String& type, const String& name, ConfigStorage& storage, Orchestrator* orchestrator = nullptr);
     
     /**
      * @brief Virtual destructor
@@ -191,6 +203,14 @@ public:
      * @return true if ready to execute
      */
     bool isReadyToExecute() const;
+    
+    /**
+     * @brief Request orchestrator to update another component's schedule
+     * @param componentId ID of component to update
+     * @param timeToWakeUp New execution time in milliseconds
+     * @return true if request was successful
+     */
+    bool requestScheduleUpdate(const String& componentId, uint32_t timeToWakeUp);
 
     // === Error Management ===
     
@@ -240,6 +260,26 @@ protected:
      * @return Merged configuration
      */
     JsonDocument mergeConfiguration(const JsonDocument& defaults, const JsonDocument& overrides);
+    
+    /**
+     * @brief Extract default values from schema properties
+     * @param schema JSON schema containing properties with default values
+     * @return Configuration with default values extracted
+     */
+    JsonDocument extractDefaultValues(const JsonDocument& schema);
+    
+    /**
+     * @brief Save configuration to persistent storage
+     * @param config Configuration to save
+     * @return True if saved successfully
+     */
+    bool saveConfigurationToStorage(const JsonDocument& config);
+    
+    /**
+     * @brief Load configuration from persistent storage
+     * @return Configuration document (empty if not found)
+     */
+    JsonDocument loadConfigurationFromStorage();
     
     /**
      * @brief Get state as string for any state

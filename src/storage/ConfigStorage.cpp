@@ -21,7 +21,19 @@ bool ConfigStorage::init() {
     }
     
     // Create directory structure
-    // Note: SPIFFS doesn't have real directories, but we use path prefixes
+    // LittleFS supports real directories, so create them
+    if (!LittleFS.exists("/config")) {
+        LittleFS.mkdir("/config");
+    }
+    if (!LittleFS.exists("/config/components")) {
+        LittleFS.mkdir("/config/components");
+    }
+    if (!LittleFS.exists("/config/schemas")) {
+        LittleFS.mkdir("/config/schemas");
+    }
+    if (!LittleFS.exists("/data")) {
+        LittleFS.mkdir("/data");
+    }
     
     m_initialized = true;
     log("ConfigStorage initialized successfully");
@@ -226,8 +238,26 @@ bool ConfigStorage::formatStorage() {
 // Private methods
 
 bool ConfigStorage::saveJsonToFile(const String& filePath, const JsonDocument& doc) {
-    // Create directory path if needed (SPIFFS will create intermediate "directories")
-    // by just creating the file with the full path
+    // Ensure directory exists by creating parent directories
+    String dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+    if (dirPath.length() > 0) {
+        // Create directory if it doesn't exist
+        if (!LittleFS.exists(dirPath)) {
+            if (!LittleFS.mkdir(dirPath)) {
+                // Try creating parent directories recursively
+                int lastSlash = dirPath.lastIndexOf('/');
+                while (lastSlash > 0) {
+                    String parentDir = dirPath.substring(0, lastSlash);
+                    if (!LittleFS.exists(parentDir)) {
+                        LittleFS.mkdir(parentDir);
+                    }
+                    lastSlash = dirPath.lastIndexOf('/', lastSlash - 1);
+                }
+                // Try creating the directory again
+                LittleFS.mkdir(dirPath);
+            }
+        }
+    }
     
     File file = LittleFS.open(filePath, "w");
     if (!file) {

@@ -30,6 +30,7 @@ private:
     // Configuration
     uint32_t m_samplingIntervalMs = 5000;  // 5 seconds default
     bool m_fahrenheit = false;             // Celsius default
+    uint8_t m_sensorType = 11;             // DHT11 default (11 or 22)
     
     // State
     float m_lastTemperature = NAN;
@@ -48,7 +49,7 @@ public:
      * @param id Unique component identifier
      * @param name Human-readable component name (optional)
      */
-    DHT22Component(const String& id, const String& name = "DHT22 Sensor");
+    DHT22Component(const String& id, const String& name, ConfigStorage& storage, Orchestrator* orchestrator = nullptr);
     
     /**
      * @brief Destructor

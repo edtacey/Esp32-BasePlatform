@@ -1,0 +1,1119 @@
+{
+    "schemas": {
+        "CPUTempSensor": {
+            "name": "CPU Temperature Sensor", 
+            "category": "sensor",
+            "className": "CPUTempSensor",
+            "description": "Built-in ESP32 CPU temperature sensor (no external hardware required)",
+            "icon": "fas fa-microchip",
+            "color": "#4ecdc4",
+            "required_parameters": [],
+            "optional_parameters": ["read_interval_ms", "mqtt_enabled", "mqtt_topic", "temp_offset"],
+            "parameters": {
+                "read_interval_ms": {
+                    "type": "integer",
+                    "label": "Reading Interval (ms)",
+                    "description": "How often to read temperature (minimum 1000ms)",
+                    "min": 1000,
+                    "max": 300000,
+                    "default": 10000,
+                    "validation": "positive_integer"
+                },
+                "mqtt_enabled": {
+                    "type": "boolean", 
+                    "label": "MQTT Publishing",
+                    "description": "Enable MQTT publishing of temperature data",
+                    "default": true
+                },
+                "mqtt_topic": {
+                    "type": "string",
+                    "label": "MQTT Topic",
+                    "description": "MQTT topic for publishing temperature data",
+                    "default": "esp32/cpu_temp",
+                    "validation": "mqtt_topic"
+                },
+                "temp_offset": {
+                    "type": "number",
+                    "label": "Temperature Offset (°C)",
+                    "description": "Calibration offset to adjust temperature readings",
+                    "min": -20,
+                    "max": 20,
+                    "default": 0,
+                    "step": 0.1
+                }
+            },
+            "outputs": {
+                "temperature": {
+                    "type": "float",
+                    "unit": "°C",
+                    "description": "Current CPU temperature in Celsius"
+                },
+                "read_count": {
+                    "type": "integer", 
+                    "description": "Total number of temperature readings taken"
+                }
+            }
+        },
+        "TemperatureSensor": {
+            "name": "Temperature Sensor",
+            "category": "sensor",
+            "className": "TemperatureSensor",
+            "description": "Measures ambient temperature in Celsius and Fahrenheit",
+            "icon": "fas fa-thermometer-half",
+            "color": "#ff6b6b",
+            "required_parameters": ["pin", "sensor_type"],
+            "optional_parameters": ["interval", "calibration_offset", "alert_thresholds"],
+            "parameters": {
+                "pin": {
+                    "type": "integer",
+                    "label": "GPIO Pin",
+                    "description": "GPIO pin number for sensor connection",
+                    "min": 0,
+                    "max": 39,
+                    "validation": "gpio_pin"
+                },
+                "sensor_type": {
+                    "type": "select",
+                    "label": "Sensor Type",
+                    "description": "Type of temperature sensor",
+                    "options": ["DS18B20", "DHT22", "BME280", "Generic"],
+                    "default": "DS18B20"
+                },
+                "interval": {
+                    "type": "integer",
+                    "label": "Reading Interval (ms)",
+                    "description": "How often to read sensor data",
+                    "min": 100,
+                    "max": 60000,
+                    "default": 5000,
+                    "unit": "ms"
+                },
+                "calibration_offset": {
+                    "type": "float",
+                    "label": "Calibration Offset (°C)",
+                    "description": "Temperature calibration adjustment",
+                    "min": -10.0,
+                    "max": 10.0,
+                    "default": 0.0,
+                    "step": 0.1,
+                    "unit": "°C"
+                },
+                "alert_thresholds": {
+                    "type": "object",
+                    "label": "Alert Thresholds",
+                    "description": "Temperature alert settings",
+                    "properties": {
+                        "min_temp": {
+                            "type": "float",
+                            "label": "Min Alert (°C)",
+                            "default": 0
+                        },
+                        "max_temp": {
+                            "type": "float",
+                            "label": "Max Alert (°C)",
+                            "default": 50
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "label": "Enable Alerts",
+                            "default": false
+                        }
+                    }
+                }
+            },
+            "output_format": {
+                "temperature_c": {
+                    "type": "float",
+                    "unit": "°C",
+                    "label": "Temperature (°C)"
+                },
+                "temperature_f": {
+                    "type": "float",
+                    "unit": "°F",
+                    "label": "Temperature (°F)"
+                },
+                "status": {
+                    "type": "string",
+                    "label": "Status"
+                }
+            },
+            "ui_components": {
+                "display": "temperature-gauge",
+                "chart": "line-chart",
+                "alerts": true
+            }
+        },
+        "HumiditySensor": {
+            "name": "Humidity Sensor",
+            "category": "sensor",
+            "className": "HumiditySensor",
+            "description": "Measures relative humidity percentage",
+            "icon": "fas fa-tint",
+            "color": "#4ecdc4",
+            "required_parameters": ["pin"],
+            "optional_parameters": ["interval", "calibration_factor"],
+            "parameters": {
+                "pin": {
+                    "type": "integer",
+                    "label": "GPIO Pin",
+                    "description": "GPIO pin number for sensor connection",
+                    "min": 0,
+                    "max": 39,
+                    "validation": "gpio_pin"
+                },
+                "interval": {
+                    "type": "integer",
+                    "label": "Reading Interval (ms)",
+                    "min": 1000,
+                    "max": 60000,
+                    "default": 5000,
+                    "unit": "ms"
+                },
+                "calibration_factor": {
+                    "type": "float",
+                    "label": "Calibration Factor",
+                    "description": "Humidity calibration multiplier",
+                    "min": 0.5,
+                    "max": 2.0,
+                    "default": 1.0,
+                    "step": 0.01
+                }
+            },
+            "output_format": {
+                "humidity": {
+                    "type": "float",
+                    "unit": "%",
+                    "label": "Relative Humidity"
+                },
+                "dew_point": {
+                    "type": "float",
+                    "unit": "°C",
+                    "label": "Dew Point"
+                }
+            },
+            "ui_components": {
+                "display": "humidity-gauge",
+                "chart": "line-chart"
+            }
+        },
+        "DHT22": {
+            "name": "DHT22 Temperature/Humidity Sensor",
+            "category": "sensor",
+            "className": "DHT22Sensor",
+            "description": "DHT22 (AM2302) digital temperature and humidity sensor with high precision readings",
+            "icon": "fas fa-thermometer-three-quarters",
+            "color": "#17a2b8",
+            "required_parameters": ["pin"],
+            "optional_parameters": ["sensor_type", "read_interval_ms", "averaging_samples", "temperature_unit"],
+            "parameters": {
+                "pin": {
+                    "type": "integer",
+                    "label": "GPIO Pin",
+                    "description": "GPIO pin number for DHT22 data connection",
+                    "min": 0,
+                    "max": 39,
+                    "validation": "gpio_pin"
+                },
+                "sensor_type": {
+                    "type": "select",
+                    "label": "Sensor Type",
+                    "description": "DHT sensor model type",
+                    "options": [11, 22],
+                    "default": 22
+                },
+                "read_interval_ms": {
+                    "type": "integer",
+                    "label": "Reading Interval (ms)",
+                    "description": "How often to read sensor data",
+                    "min": 1000,
+                    "max": 60000,
+                    "default": 5000,
+                    "unit": "ms"
+                },
+                "averaging_samples": {
+                    "type": "integer",
+                    "label": "Averaging Samples",
+                    "description": "Number of readings to average for stability",
+                    "min": 1,
+                    "max": 10,
+                    "default": 3
+                },
+                "temperature_unit": {
+                    "type": "select",
+                    "label": "Temperature Unit",
+                    "description": "Primary temperature unit preference",
+                    "options": ["celsius", "fahrenheit", "both"],
+                    "default": "celsius"
+                }
+            },
+            "output_format": {
+                "temperature_c": {
+                    "type": "float",
+                    "unit": "°C",
+                    "label": "Temperature (°C)"
+                },
+                "temperature_f": {
+                    "type": "float",
+                    "unit": "°F",
+                    "label": "Temperature (°F)"
+                },
+                "humidity": {
+                    "type": "float",
+                    "unit": "%",
+                    "label": "Relative Humidity"
+                },
+                "heat_index": {
+                    "type": "float",
+                    "unit": "°C",
+                    "label": "Heat Index"
+                },
+                "status": {
+                    "type": "string",
+                    "label": "Status"
+                }
+            },
+            "ui_components": {
+                "display": "dht-sensor-card",
+                "chart": "multi-line-chart",
+                "alerts": true
+            }
+        },
+        "LEDActuator": {
+            "name": "LED Actuator",
+            "category": "actuator",
+            "className": "LEDActuator",
+            "description": "Controls LED with multiple functions",
+            "icon": "fas fa-lightbulb",
+            "color": "#f39c12",
+            "required_parameters": ["pin"],
+            "optional_parameters": ["brightness", "pwm_enabled"],
+            "parameters": {
+                "pin": {
+                    "type": "integer",
+                    "label": "GPIO Pin",
+                    "description": "GPIO pin number for LED connection",
+                    "min": 0,
+                    "max": 39,
+                    "validation": "gpio_pin"
+                },
+                "brightness": {
+                    "type": "integer",
+                    "label": "Default Brightness",
+                    "description": "Default brightness level (0-255)",
+                    "min": 0,
+                    "max": 255,
+                    "default": 255
+                },
+                "pwm_enabled": {
+                    "type": "boolean",
+                    "label": "Enable PWM",
+                    "description": "Enable PWM for brightness control",
+                    "default": true
+                }
+            },
+            "functions": {
+                "on": {
+                    "name": "Turn On",
+                    "description": "Turn LED on",
+                    "parameters": {
+                        "brightness": {
+                            "type": "integer",
+                            "label": "Brightness (0-255)",
+                            "min": 0,
+                            "max": 255,
+                            "default": 255,
+                            "optional": true
+                        }
+                    }
+                },
+                "off": {
+                    "name": "Turn Off",
+                    "description": "Turn LED off",
+                    "parameters": {}
+                },
+                "toggle": {
+                    "name": "Toggle",
+                    "description": "Toggle LED state",
+                    "parameters": {}
+                },
+                "blink": {
+                    "name": "Blink",
+                    "description": "Blink LED with specified pattern",
+                    "parameters": {
+                        "count": {
+                            "type": "integer",
+                            "label": "Blink Count",
+                            "min": 1,
+                            "max": 100,
+                            "default": 5
+                        },
+                        "on_duration": {
+                            "type": "integer",
+                            "label": "On Duration (ms)",
+                            "min": 50,
+                            "max": 5000,
+                            "default": 500,
+                            "unit": "ms"
+                        },
+                        "off_duration": {
+                            "type": "integer",
+                            "label": "Off Duration (ms)",
+                            "min": 50,
+                            "max": 5000,
+                            "default": 500,
+                            "unit": "ms"
+                        }
+                    }
+                },
+                "fade": {
+                    "name": "Fade",
+                    "description": "Fade LED between brightness levels",
+                    "parameters": {
+                        "start_brightness": {
+                            "type": "integer",
+                            "label": "Start Brightness",
+                            "min": 0,
+                            "max": 255,
+                            "default": 0
+                        },
+                        "end_brightness": {
+                            "type": "integer",
+                            "label": "End Brightness",
+                            "min": 0,
+                            "max": 255,
+                            "default": 255
+                        },
+                        "duration": {
+                            "type": "integer",
+                            "label": "Fade Duration (ms)",
+                            "min": 100,
+                            "max": 10000,
+                            "default": 1000,
+                            "unit": "ms"
+                        }
+                    }
+                }
+            },
+            "ui_components": {
+                "control": "button-group",
+                "brightness_slider": true
+            }
+        },
+        "RelayActuator": {
+            "name": "Relay Actuator",
+            "category": "actuator",
+            "className": "RelayActuator",
+            "description": "Controls high-power devices via relay",
+            "icon": "fas fa-toggle-on",
+            "color": "#e74c3c",
+            "required_parameters": ["pin"],
+            "optional_parameters": ["safety_timeout", "invert_logic"],
+            "parameters": {
+                "pin": {
+                    "type": "integer",
+                    "label": "GPIO Pin",
+                    "description": "GPIO pin number for relay control",
+                    "min": 0,
+                    "max": 39,
+                    "validation": "gpio_pin"
+                },
+                "safety_timeout": {
+                    "type": "integer",
+                    "label": "Safety Timeout (ms)",
+                    "description": "Automatic shutoff timeout for safety",
+                    "min": 0,
+                    "max": 3600000,
+                    "default": 0,
+                    "unit": "ms"
+                },
+                "invert_logic": {
+                    "type": "boolean",
+                    "label": "Invert Logic",
+                    "description": "Invert HIGH/LOW logic for relay control",
+                    "default": false
+                }
+            },
+            "functions": {
+                "on": {
+                    "name": "Turn On",
+                    "description": "Activate relay",
+                    "parameters": {
+                        "timeout": {
+                            "type": "integer",
+                            "label": "Auto-off Timeout (ms)",
+                            "min": 0,
+                            "max": 3600000,
+                            "default": 0,
+                            "optional": true,
+                            "unit": "ms"
+                        }
+                    }
+                },
+                "off": {
+                    "name": "Turn Off",
+                    "description": "Deactivate relay",
+                    "parameters": {}
+                },
+                "toggle": {
+                    "name": "Toggle",
+                    "description": "Toggle relay state",
+                    "parameters": {}
+                }
+            },
+            "ui_components": {
+                "control": "toggle-switch",
+                "safety_indicator": true
+            }
+        },
+        "ESP32CpuTempSensor": {
+            "name": "ESP32 CPU Temperature Sensor",
+            "category": "sensor",
+            "className": "ESP32CpuTempSensor",
+            "description": "Reads ESP32 internal CPU temperature using built-in sensor",
+            "icon": "fas fa-microchip",
+            "color": "#ff9500",
+            "required_parameters": [],
+            "optional_parameters": ["interval", "lastNToAverage", "temperature_unit"],
+            "parameters": {
+                "interval": {
+                    "type": "integer",
+                    "label": "Reading Interval (ms)",
+                    "description": "How often to read CPU temperature",
+                    "min": 100,
+                    "max": 60000,
+                    "default": 5000,
+                    "unit": "ms"
+                },
+                "lastNToAverage": {
+                    "type": "integer",
+                    "label": "Readings to Average",
+                    "description": "Number of last readings to average for stability",
+                    "min": 1,
+                    "max": 20,
+                    "default": 5
+                },
+                "temperature_unit": {
+                    "type": "select",
+                    "label": "Temperature Unit",
+                    "description": "Primary temperature unit preference",
+                    "options": ["celsius", "fahrenheit", "both"],
+                    "default": "celsius"
+                }
+            },
+            "output_format": {
+                "TempC": {
+                    "type": "float",
+                    "unit": "°C",
+                    "label": "Temperature (°C)",
+                    "precision": 2
+                },
+                "TempF": {
+                    "type": "float",
+                    "unit": "°F",
+                    "label": "Temperature (°F)",
+                    "precision": 2
+                },
+                "ReadStatus": {
+                    "type": "string",
+                    "label": "Read Status",
+                    "enum": ["ok", "error", "warming_up"]
+                }
+            },
+            "functions": {
+                "read": {
+                    "name": "Read Temperature",
+                    "description": "Force immediate CPU temperature reading",
+                    "parameters": {}
+                }
+            },
+            "ui_components": {
+                "display": "temperature-gauge",
+                "chart": "line-chart"
+            }
+        },
+        "TSL2561LightSensor": {
+            "name": "TSL2561 Light Sensor",
+            "category": "sensor",
+            "className": "TSL2561LightSensor",
+            "description": "Digital luminosity/lux light sensor with dual photodiodes",
+            "manufacturer": "TAOS/AMS",
+            "icon": "fas fa-sun",
+            "color": "#f1c40f",
+            "protocol": "i2c",
+            "required_parameters": ["i2c_bus"],
+            "optional_parameters": ["i2c_address", "integration_time", "gain", "interval", "averaging_samples", "auto_gain", "power_save"],
+            "parameters": {
+                "i2c_bus": {
+                    "type": "select",
+                    "label": "I2C Bus",
+                    "description": "I2C bus selection for sensor connection",
+                    "options": ["bus0", "bus1", "custom"],
+                    "default": "bus0"
+                },
+                "i2c_address": {
+                    "type": "select",
+                    "label": "I2C Address",
+                    "description": "I2C address (0x29, 0x39, or 0x49)",
+                    "options": [41, 57, 73],
+                    "default": 57,
+                    "validation": "i2c_address"
+                },
+                "sda_pin": {
+                    "type": "integer",
+                    "label": "SDA Pin (Custom Bus)",
+                    "description": "GPIO pin for I2C SDA (only for custom bus)",
+                    "min": 0,
+                    "max": 39,
+                    "default": 21,
+                    "validation": "gpio_pin"
+                },
+                "scl_pin": {
+                    "type": "integer",
+                    "label": "SCL Pin (Custom Bus)",
+                    "description": "GPIO pin for I2C SCL (only for custom bus)",
+                    "min": 0,
+                    "max": 39,
+                    "default": 22,
+                    "validation": "gpio_pin"
+                },
+                "integration_time": {
+                    "type": "select",
+                    "label": "Integration Time",
+                    "description": "ADC integration time in milliseconds",
+                    "options": [13, 101, 402],
+                    "default": 402,
+                    "unit": "ms"
+                },
+                "gain": {
+                    "type": "select",
+                    "label": "Gain",
+                    "description": "Sensor gain setting",
+                    "options": [1, 16],
+                    "default": 1
+                },
+                "interval": {
+                    "type": "integer",
+                    "label": "Reading Interval (ms)",
+                    "description": "How often to read sensor data",
+                    "min": 500,
+                    "max": 60000,
+                    "default": 2000,
+                    "unit": "ms"
+                },
+                "averaging_samples": {
+                    "type": "integer",
+                    "label": "Averaging Samples",
+                    "description": "Number of readings to average for stability",
+                    "min": 1,
+                    "max": 10,
+                    "default": 3
+                },
+                "auto_gain": {
+                    "type": "boolean",
+                    "label": "Auto Gain",
+                    "description": "Automatically adjust gain based on light level",
+                    "default": true
+                },
+                "power_save": {
+                    "type": "boolean",
+                    "label": "Power Save",
+                    "description": "Power down sensor between readings",
+                    "default": true
+                }
+            },
+            "output_format": {
+                "lux": {
+                    "type": "float",
+                    "unit": "lux",
+                    "label": "Illuminance",
+                    "description": "Light intensity in lux"
+                },
+                "broadband_raw": {
+                    "type": "integer",
+                    "label": "Channel 0 (Full)",
+                    "description": "Raw full spectrum reading"
+                },
+                "ir_raw": {
+                    "type": "integer",
+                    "label": "Channel 1 (IR)",
+                    "description": "Raw infrared reading"
+                },
+                "gain": {
+                    "type": "integer",
+                    "label": "Current Gain",
+                    "description": "Current gain setting (1x or 16x)"
+                },
+                "saturation_detected": {
+                    "type": "boolean",
+                    "label": "Saturated",
+                    "description": "Sensor saturation status"
+                },
+                "read_status": {
+                    "type": "string",
+                    "label": "Read Status",
+                    "description": "Sensor reading status"
+                }
+            },
+            "functions": {
+                "read": {
+                    "name": "Read Light",
+                    "description": "Get current light reading"
+                }
+            },
+            "ui_components": {
+                "display": "light-sensor-gauge",
+                "chart": "line-chart"
+            }
+        },
+        "PeristalticPump": {
+            "name": "Peristaltic Pump",
+            "category": "actuator",
+            "className": "PeristalticPump",
+            "description": "Precision liquid dosing pump with autonomous operation",
+            "icon": "fas fa-tint-slash",
+            "color": "#2980b9",
+            "required_parameters": ["pump_pin"],
+            "optional_parameters": ["ml_per_second", "max_runtime", "direction_pin"],
+            "parameters": {
+                "pump_pin": {
+                    "type": "integer",
+                    "label": "Pump Control Pin",
+                    "description": "GPIO pin for pump control relay",
+                    "min": 0,
+                    "max": 39,
+                    "validation": "gpio_pin"
+                },
+                "ml_per_second": {
+                    "type": "float",
+                    "label": "Flow Rate (ml/s)",
+                    "description": "Default pump flow rate in milliliters per second",
+                    "min": 0.1,
+                    "max": 50.0,
+                    "default": 2.0,
+                    "step": 0.1,
+                    "unit": "ml/s"
+                },
+                "max_runtime": {
+                    "type": "integer",
+                    "label": "Maximum Runtime (ms)",
+                    "description": "Safety timeout for continuous operation",
+                    "min": 1000,
+                    "max": 300000,
+                    "default": 60000,
+                    "unit": "ms"
+                },
+                "direction_pin": {
+                    "type": "integer",
+                    "label": "Direction Pin",
+                    "description": "Optional GPIO pin for pump direction control (-1 if not used)",
+                    "min": -1,
+                    "max": 39,
+                    "default": -1,
+                    "validation": "gpio_pin_or_disabled"
+                }
+            },
+            "functions": {
+                "dose": {
+                    "name": "Dose Volume",
+                    "description": "Dose a specific volume of liquid",
+                    "parameters": {
+                        "volume_ml": {
+                            "type": "float",
+                            "label": "Volume (ml)",
+                            "description": "Volume to dispense in milliliters",
+                            "min": 0.1,
+                            "max": 1000.0,
+                            "default": 10.0,
+                            "step": 0.1,
+                            "unit": "ml"
+                        },
+                        "flow_rate": {
+                            "type": "float",
+                            "label": "Flow Rate (ml/s)",
+                            "description": "Dispensing flow rate",
+                            "min": 0.1,
+                            "max": 50.0,
+                            "default": 2.0,
+                            "step": 0.1,
+                            "unit": "ml/s",
+                            "optional": true
+                        }
+                    }
+                },
+                "start": {
+                    "name": "Start Continuous",
+                    "description": "Start continuous pumping until stopped",
+                    "parameters": {}
+                },
+                "stop": {
+                    "name": "Stop",
+                    "description": "Stop pump operation immediately",
+                    "parameters": {}
+                },
+                "reverse": {
+                    "name": "Reverse",
+                    "description": "Run pump in reverse for specified duration",
+                    "parameters": {
+                        "duration_ms": {
+                            "type": "integer",
+                            "label": "Duration (ms)",
+                            "description": "Reverse operation duration in milliseconds",
+                            "min": 100,
+                            "max": 30000,
+                            "default": 1000,
+                            "unit": "ms"
+                        }
+                    }
+                }
+            },
+            "output_format": {
+                "pump_state": {
+                    "type": "string",
+                    "label": "Pump State",
+                    "enum": ["idle", "dosing", "reversing", "error", "completed"]
+                },
+                "pump_running": {
+                    "type": "boolean",
+                    "label": "Pump Running"
+                },
+                "elapsed_time_ms": {
+                    "type": "integer",
+                    "unit": "ms",
+                    "label": "Elapsed Time"
+                },
+                "remaining_time_ms": {
+                    "type": "integer",
+                    "unit": "ms",
+                    "label": "Remaining Time"
+                },
+                "dispensed_volume_ml": {
+                    "type": "float",
+                    "unit": "ml",
+                    "label": "Dispensed Volume"
+                },
+                "remaining_volume_ml": {
+                    "type": "float",
+                    "unit": "ml",
+                    "label": "Remaining Volume"
+                },
+                "progress_percent": {
+                    "type": "float",
+                    "unit": "%",
+                    "label": "Progress"
+                },
+                "total_dispensed_today_ml": {
+                    "type": "float",
+                    "unit": "ml",
+                    "label": "Daily Total Dispensed"
+                },
+                "flow_rate_ml_per_sec": {
+                    "type": "float",
+                    "unit": "ml/s",
+                    "label": "Current Flow Rate"
+                }
+            },
+            "ui_components": {
+                "control": "pump-control",
+                "volume_input": true,
+                "flow_rate_input": true,
+                "progress_indicator": true,
+                "daily_stats": true
+            }
+        }
+    },
+    "execution_window_types": {
+        "SensorMonitoring": {
+            "name": "Sensor Monitoring",
+            "description": "Monitor sensors and trigger actions based on conditions",
+            "icon": "fas fa-chart-line",
+            "color": "#3498db",
+            "supports_multiple_sensors": true,
+            "supports_multiple_actuators": true,
+            "config_schema": {
+                "monitoring_interval": {
+                    "type": "integer",
+                    "label": "Monitoring Interval (ms)",
+                    "min": 100,
+                    "max": 60000,
+                    "default": 5000,
+                    "unit": "ms"
+                },
+                "sensors": {
+                    "type": "array",
+                    "label": "Sensor Conditions",
+                    "item_schema": {
+                        "sensor_id": {
+                            "type": "select",
+                            "label": "Sensor",
+                            "options_source": "available_sensors"
+                        },
+                        "parameter": {
+                            "type": "select",
+                            "label": "Parameter",
+                            "options_source": "sensor_parameters"
+                        },
+                        "condition": {
+                            "type": "select",
+                            "label": "Condition",
+                            "options": ["greater_than", "less_than", "equals", "between", "outside_range"]
+                        },
+                        "threshold": {
+                            "type": "float",
+                            "label": "Threshold Value"
+                        },
+                        "hysteresis": {
+                            "type": "float",
+                            "label": "Hysteresis",
+                            "default": 0.5
+                        }
+                    }
+                },
+                "actions": {
+                    "type": "array",
+                    "label": "Actions to Execute",
+                    "item_schema": {
+                        "actuator_id": {
+                            "type": "select",
+                            "label": "Actuator",
+                            "options_source": "available_actuators"
+                        },
+                        "function": {
+                            "type": "select",
+                            "label": "Function",
+                            "options_source": "actuator_functions"
+                        },
+                        "parameters": {
+                            "type": "object",
+                            "label": "Function Parameters"
+                        },
+                        "delay": {
+                            "type": "integer",
+                            "label": "Delay Before Execution (ms)",
+                            "min": 0,
+                            "max": 60000,
+                            "default": 0,
+                            "unit": "ms"
+                        }
+                    }
+                }
+            }
+        },
+        "ScheduledTask": {
+            "name": "Scheduled Task",
+            "description": "Execute actuator sequences on a schedule",
+            "icon": "fas fa-clock",
+            "color": "#9b59b6",
+            "supports_multiple_sensors": false,
+            "supports_multiple_actuators": true,
+            "config_schema": {
+                "schedule_type": {
+                    "type": "select",
+                    "label": "Schedule Type",
+                    "options": ["interval", "cron", "once"]
+                },
+                "interval": {
+                    "type": "integer",
+                    "label": "Interval (ms)",
+                    "min": 1000,
+                    "max": 86400000,
+                    "default": 10000,
+                    "unit": "ms",
+                    "conditional": "schedule_type === 'interval'"
+                },
+                "cron_expression": {
+                    "type": "text",
+                    "label": "Cron Expression",
+                    "placeholder": "0 0 * * * *",
+                    "conditional": "schedule_type === 'cron'"
+                },
+                "task_sequence": {
+                    "type": "array",
+                    "label": "Task Steps",
+                    "item_schema": {
+                        "step_name": {
+                            "type": "text",
+                            "label": "Step Name"
+                        },
+                        "actuator_id": {
+                            "type": "select",
+                            "label": "Actuator",
+                            "options_source": "available_actuators"
+                        },
+                        "function": {
+                            "type": "select",
+                            "label": "Function",
+                            "options_source": "actuator_functions"
+                        },
+                        "parameters": {
+                            "type": "object",
+                            "label": "Function Parameters"
+                        },
+                        "wait_after": {
+                            "type": "integer",
+                            "label": "Wait After Step (ms)",
+                            "min": 0,
+                            "max": 60000,
+                            "default": 0,
+                            "unit": "ms"
+                        }
+                    }
+                }
+            }
+        },
+        "PeristalticPump": {
+            "name": "Peristaltic Pump",
+            "category": "actuator",
+            "className": "PeristalticPump",
+            "description": "Precision liquid dosing pump with autonomous operation",
+            "icon": "fas fa-tint-slash",
+            "color": "#2980b9",
+            "required_parameters": ["pump_pin"],
+            "optional_parameters": ["ml_per_second", "max_runtime", "direction_pin"],
+            "parameters": {
+                "pump_pin": {
+                    "type": "integer",
+                    "label": "Pump Control Pin",
+                    "description": "GPIO pin for pump control relay",
+                    "min": 0,
+                    "max": 39,
+                    "validation": "gpio_pin"
+                },
+                "ml_per_second": {
+                    "type": "float",
+                    "label": "Flow Rate (ml/s)",
+                    "description": "Default pump flow rate in milliliters per second",
+                    "min": 0.1,
+                    "max": 50.0,
+                    "default": 2.0,
+                    "step": 0.1,
+                    "unit": "ml/s"
+                },
+                "max_runtime": {
+                    "type": "integer",
+                    "label": "Maximum Runtime (ms)",
+                    "description": "Safety timeout for continuous operation",
+                    "min": 1000,
+                    "max": 300000,
+                    "default": 60000,
+                    "unit": "ms"
+                },
+                "direction_pin": {
+                    "type": "integer",
+                    "label": "Direction Pin",
+                    "description": "Optional GPIO pin for pump direction control (-1 if not used)",
+                    "min": -1,
+                    "max": 39,
+                    "default": -1,
+                    "validation": "gpio_pin_or_disabled"
+                }
+            },
+            "functions": {
+                "dose": {
+                    "name": "Dose Volume",
+                    "description": "Dose a specific volume of liquid",
+                    "parameters": {
+                        "volume_ml": {
+                            "type": "float",
+                            "label": "Volume (ml)",
+                            "description": "Volume to dispense in milliliters",
+                            "min": 0.1,
+                            "max": 1000.0,
+                            "default": 10.0,
+                            "step": 0.1,
+                            "unit": "ml"
+                        },
+                        "flow_rate": {
+                            "type": "float",
+                            "label": "Flow Rate (ml/s)",
+                            "description": "Dispensing flow rate",
+                            "min": 0.1,
+                            "max": 50.0,
+                            "default": 2.0,
+                            "step": 0.1,
+                            "unit": "ml/s",
+                            "optional": true
+                        }
+                    }
+                },
+                "start": {
+                    "name": "Start Continuous",
+                    "description": "Start continuous pumping until stopped",
+                    "parameters": {}
+                },
+                "stop": {
+                    "name": "Stop",
+                    "description": "Stop pump operation immediately",
+                    "parameters": {}
+                },
+                "reverse": {
+                    "name": "Reverse",
+                    "description": "Run pump in reverse for specified duration",
+                    "parameters": {
+                        "duration_ms": {
+                            "type": "integer",
+                            "label": "Duration (ms)",
+                            "description": "Reverse operation duration in milliseconds",
+                            "min": 100,
+                            "max": 30000,
+                            "default": 1000,
+                            "unit": "ms"
+                        }
+                    }
+                }
+            },
+            "output_format": {
+                "pump_state": {
+                    "type": "string",
+                    "label": "Pump State",
+                    "enum": ["idle", "dosing", "reversing", "error", "completed"]
+                },
+                "pump_running": {
+                    "type": "boolean",
+                    "label": "Pump Running"
+                },
+                "elapsed_time_ms": {
+                    "type": "integer",
+                    "unit": "ms",
+                    "label": "Elapsed Time"
+                },
+                "remaining_time_ms": {
+                    "type": "integer",
+                    "unit": "ms",
+                    "label": "Remaining Time"
+                },
+                "dispensed_volume_ml": {
+                    "type": "float",
+                    "unit": "ml",
+                    "label": "Dispensed Volume"
+                },
+                "remaining_volume_ml": {
+                    "type": "float",
+                    "unit": "ml",
+                    "label": "Remaining Volume"
+                },
+                "progress_percent": {
+                    "type": "float",
+                    "unit": "%",
+                    "label": "Progress"
+                },
+                "total_dispensed_today_ml": {
+                    "type": "float",
+                    "unit": "ml",
+                    "label": "Daily Total Dispensed"
+                },
+                "flow_rate_ml_per_sec": {
+                    "type": "float",
+                    "unit": "ml/s",
+                    "label": "Current Flow Rate"
+                }
+            },
+            "ui_components": {
+                "control": "pump-control",
+                "volume_input": true,
+                "flow_rate_input": true,
+                "progress_indicator": true,
+                "daily_stats": true
+            }
+        }
+    }
+}

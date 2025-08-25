@@ -5,8 +5,8 @@
 
 #include "DHT22Component.h"
 
-DHT22Component::DHT22Component(const String& id, const String& name)
-    : BaseComponent(id, "DHT22", name)
+DHT22Component::DHT22Component(const String& id, const String& name, ConfigStorage& storage, Orchestrator* orchestrator)
+    : BaseComponent(id, "DHT22", name, storage, orchestrator)
 {
     log(Logger::DEBUG, "DHT22Component created");
 }
@@ -61,7 +61,15 @@ JsonDocument DHT22Component::getDefaultSchema() const {
     nameProp["default"] = "DHT22 Sensor";
     nameProp["description"] = "Human-readable sensor name";
     
-    log(Logger::DEBUG, "Generated default schema with pin=15, interval=5000ms");
+    // Sensor type (DHT11 or DHT22)
+    JsonObject typeProp = properties["sensorType"].to<JsonObject>();
+    typeProp["type"] = "integer";
+    typeProp["minimum"] = 11;
+    typeProp["maximum"] = 22;
+    typeProp["default"] = 11;  // Default to DHT11
+    typeProp["description"] = "Sensor type: 11 for DHT11, 22 for DHT22";
+    
+    log(Logger::DEBUG, "Generated default schema with pin=15, interval=5000ms, type=DHT11");
     return schema;
 }
 
@@ -91,7 +99,7 @@ bool DHT22Component::initialize(const JsonDocument& config) {
     setNextExecutionMs(millis() + m_samplingIntervalMs);
     
     setState(ComponentState::READY);
-    log(Logger::INFO, String("DHT22 initialized on pin ") + m_pin + 
+    log(Logger::INFO, String("DHT11/22 initialized on pin ") + m_pin + 
                       ", interval=" + m_samplingIntervalMs + "ms");
     
     return true;
@@ -254,15 +262,24 @@ bool DHT22Component::applyConfiguration(const JsonDocument& config) {
         m_fahrenheit = config["fahrenheit"].as<bool>();
     }
     
+    // Extract sensor type (DHT11 or DHT22)
+    if (config["sensorType"].is<uint8_t>()) {
+        uint8_t type = config["sensorType"].as<uint8_t>();
+        if (type == 11 || type == 22) {
+            m_sensorType = type;
+        }
+    }
+    
     log(Logger::DEBUG, String("Config applied: pin=") + m_pin + 
                        ", interval=" + m_samplingIntervalMs + "ms" +
-                       ", fahrenheit=" + (m_fahrenheit ? "true" : "false"));
+                       ", fahrenheit=" + (m_fahrenheit ? "true" : "false") +
+                       ", type=DHT" + m_sensorType);
     
     return true;
 }
 
 bool DHT22Component::initializeSensor() {
-    log(Logger::DEBUG, String("Initializing DHT sensor on pin ") + m_pin);
+    log(Logger::DEBUG, String("Initializing DHT") + m_sensorType + " sensor on pin " + m_pin);
     
     // Clean up existing sensor if any
     if (m_dht) {
@@ -270,8 +287,9 @@ bool DHT22Component::initializeSensor() {
         m_dht = nullptr;
     }
     
-    // Create new DHT sensor instance
-    m_dht = new DHT(m_pin, DHT22);
+    // Create new DHT sensor instance based on configured type
+    uint8_t dhtType = (m_sensorType == 22) ? DHT22 : DHT11;
+    m_dht = new DHT(m_pin, dhtType);
     if (!m_dht) {
         log(Logger::ERROR, "Failed to create DHT sensor instance");
         return false;

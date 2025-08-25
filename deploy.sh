@@ -200,7 +200,7 @@ reset_esp32() {
         success "ESP32 reset via esptool"
     else
         # Alternative: Use PlatformIO
-        pio device monitor --port "$ESP32_PORT" --baud "$ESP32_BAUDRATE" --echo --filter send_on_enter &
+        "$PIO_CMD" device monitor --port "$ESP32_PORT" --baud "$ESP32_BAUDRATE" --echo --filter send_on_enter &
         local monitor_pid=$!
         sleep 1
         kill $monitor_pid 2>/dev/null || true
@@ -218,10 +218,10 @@ build_firmware() {
     header "BUILDING FIRMWARE"
     
     log "Cleaning previous build..."
-    pio run -t clean
+    $PIO_CMD run -t clean
     
     log "Building ESP32 firmware..."
-    if pio run; then
+    if $PIO_CMD run; then
         success "Firmware build completed successfully"
         
         # Show build statistics
@@ -244,7 +244,7 @@ upload_firmware() {
     fi
     
     log "Uploading firmware to ESP32..."
-    if pio run -t upload; then
+    if $PIO_CMD run -t upload; then
         success "Firmware uploaded successfully"
         return 0
     else
@@ -284,7 +284,7 @@ EOF
     
     # Build filesystem
     log "Building LittleFS filesystem..."
-    if pio run -t buildfs; then
+    if $PIO_CMD run -t buildfs; then
         success "LittleFS filesystem built successfully"
         
         # Show filesystem statistics
@@ -309,7 +309,7 @@ upload_filesystem() {
     fi
     
     log "Uploading LittleFS filesystem to ESP32..."
-    if pio run -t uploadfs; then
+    if $PIO_CMD run -t uploadfs; then
         success "LittleFS filesystem uploaded successfully"
         return 0
     else
@@ -322,19 +322,27 @@ monitor_esp32() {
     local terminal="$1"
     local title="ESP32 Monitor - $(date '+%H:%M:%S')"
     
-    # Enhanced monitor command with ESP32-specific filters
-    local monitor_cmd="pio device monitor --port '$ESP32_PORT' --baud '$ESP32_BAUDRATE' --filter esp32_exception_decoder --filter colorize --filter time"
+    # Try PlatformIO monitor first, fall back to simple serial monitor
+    local monitor_cmd="'$PIO_CMD' device monitor --port '$ESP32_PORT' --baud '$ESP32_BAUDRATE' --filter esp32_exception_decoder --filter colorize --filter time"
+    local fallback_cmd="stty -F '$ESP32_PORT' raw '$ESP32_BAUDRATE'; echo 'ESP32 Serial Monitor - Press Ctrl+C to exit'; cat '$ESP32_PORT'"
     
     log "Starting ESP32 monitor in new terminal..."
     info "Monitor will open in $terminal terminal"
     info "Port: $ESP32_PORT, Baud: $ESP32_BAUDRATE"
     
+    # Try PlatformIO monitor first
     if launch_terminal "$title" "$monitor_cmd" "$PROJECT_DIR" "$terminal"; then
-        success "ESP32 monitor launched successfully"
+        success "ESP32 monitor launched successfully (PlatformIO)"
         return 0
     else
-        error "Failed to launch ESP32 monitor"
-        return 1
+        warning "PlatformIO monitor failed, trying fallback serial monitor..."
+        if launch_terminal "$title - Serial" "$fallback_cmd" "$PROJECT_DIR" "$terminal"; then
+            success "ESP32 monitor launched successfully (fallback)"
+            return 0
+        else
+            error "Failed to launch ESP32 monitor"
+            return 1
+        fi
     fi
 }
 
@@ -457,7 +465,11 @@ initialize_environment() {
     fi
     
     # Check PlatformIO
-    if ! command -v pio &> /dev/null; then
+    if [ -f "/home/edt/.platformio/penv/bin/pio" ]; then
+        PIO_CMD="/home/edt/.platformio/penv/bin/pio"
+    elif command -v pio &> /dev/null; then
+        PIO_CMD="pio"
+    else
         error "PlatformIO not found. Please install PlatformIO."
         exit 1
     fi
@@ -618,7 +630,7 @@ main() {
     # Handle clean build
     if [[ "$clean_build" == "true" ]]; then
         log "Cleaning previous build..."
-        pio run -t clean
+        $PIO_CMD run -t clean
         success "Build cleaned"
     fi
     

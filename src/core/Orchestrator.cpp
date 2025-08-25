@@ -4,6 +4,8 @@
  */
 
 #include "Orchestrator.h"
+#include "../components/PeristalticPumpComponent.h"
+#include "../components/TestHPeristalticComponent.h"
 
 Orchestrator::Orchestrator() {
     log(Logger::DEBUG, "Orchestrator created");
@@ -17,7 +19,7 @@ bool Orchestrator::init() {
     log(Logger::INFO, "Initializing ESP32 IoT Orchestrator...");
     
     // Initialize logger first
-    Logger::init(Logger::INFO);
+    Logger::init(Logger::DEBUG);
     
     // Record start time
     m_startTime = millis();
@@ -151,6 +153,22 @@ BaseComponent* Orchestrator::findComponent(const String& componentId) {
     return (it != m_components.end()) ? *it : nullptr;
 }
 
+bool Orchestrator::updateNextCheck(const String& componentId, uint32_t timeToWakeUp) {
+    BaseComponent* component = findComponent(componentId);
+    if (!component) {
+        log(Logger::WARNING, "Cannot update schedule - component not found: " + componentId);
+        return false;
+    }
+    
+    uint32_t oldTime = component->getNextExecutionMs();
+    component->setNextExecutionMs(timeToWakeUp);
+    
+    log(Logger::DEBUG, String("Updated schedule for ") + componentId + 
+                       ": " + oldTime + "ms -> " + timeToWakeUp + "ms");
+    
+    return true;
+}
+
 uint32_t Orchestrator::getUptime() const {
     return millis() - m_startTime;
 }
@@ -276,7 +294,7 @@ bool Orchestrator::initializeDefaultComponents() {
     
     // Initialize DHT22 sensor with default configuration (pin 15)
     log(Logger::INFO, "Creating DHT22 temperature/humidity sensor...");
-    DHT22Component* dht = new DHT22Component("dht22-1", "Room Temperature/Humidity");
+    DHT22Component* dht = new DHT22Component("dht22-1", "Room Temperature/Humidity", m_storage, this);
     
     if (!dht->initialize(JsonDocument())) {  // Use default configuration
         log(Logger::ERROR, "Failed to initialize DHT22 component");
@@ -292,7 +310,7 @@ bool Orchestrator::initializeDefaultComponents() {
     
     // Initialize TSL2561 light sensor with default configuration
     log(Logger::INFO, "Creating TSL2561 light sensor...");
-    TSL2561Component* tsl = new TSL2561Component("tsl2561-1", "Ambient Light Sensor");
+    TSL2561Component* tsl = new TSL2561Component("tsl2561-1", "Ambient Light Sensor", m_storage, this);
     
     if (!tsl->initialize(JsonDocument())) {  // Use default configuration
         log(Logger::ERROR, "Failed to initialize TSL2561 component");
@@ -302,6 +320,38 @@ bool Orchestrator::initializeDefaultComponents() {
         if (!registerComponent(tsl)) {
             log(Logger::ERROR, "Failed to register TSL2561 component");
             delete tsl;
+            allSuccess = false;
+        }
+    }
+    
+    // Initialize Peristaltic Pump with default configuration (GPIO26, 40ml/s)
+    log(Logger::INFO, "Creating peristaltic pump...");
+    PeristalticPumpComponent* pump = new PeristalticPumpComponent("pump-1", "Nutrient Pump", m_storage, this);
+    
+    if (!pump->initialize(JsonDocument())) {  // Use default configuration
+        log(Logger::ERROR, "Failed to initialize pump component");
+        delete pump;
+        allSuccess = false;
+    } else {
+        if (!registerComponent(pump)) {
+            log(Logger::ERROR, "Failed to register pump component");
+            delete pump;
+            allSuccess = false;
+        }
+    }
+    
+    // Initialize Test Harness for pump testing
+    log(Logger::INFO, "Creating pump test harness...");
+    TestHPeristalticComponent* testHarness = new TestHPeristalticComponent("test-harness-1", "Pump Test Harness", m_storage, this);
+    
+    if (!testHarness->initialize(JsonDocument())) {  // Use default configuration
+        log(Logger::ERROR, "Failed to initialize test harness component");
+        delete testHarness;
+        allSuccess = false;
+    } else {
+        if (!registerComponent(testHarness)) {
+            log(Logger::ERROR, "Failed to register test harness component");
+            delete testHarness;
             allSuccess = false;
         }
     }

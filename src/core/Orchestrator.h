@@ -93,6 +93,14 @@ public:
      * @return Component pointer or nullptr if not found
      */
     BaseComponent* findComponent(const String& componentId);
+    
+    /**
+     * @brief Update next execution time for a specific component
+     * @param componentId ID of component to update
+     * @param timeToWakeUp New execution time in milliseconds
+     * @return true if component was found and updated
+     */
+    bool updateNextCheck(const String& componentId, uint32_t timeToWakeUp);
 
     /**
      * @brief Get all registered components

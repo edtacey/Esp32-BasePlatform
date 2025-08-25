@@ -55,7 +55,7 @@ public:
      * @param id Unique component identifier
      * @param name Human-readable component name (optional)
      */
-    TSL2561Component(const String& id, const String& name = "TSL2561 Light Sensor");
+    TSL2561Component(const String& id, const String& name, ConfigStorage& storage, Orchestrator* orchestrator = nullptr);
     
     /**
      * @brief Destructor
