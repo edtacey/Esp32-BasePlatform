@@ -37,7 +37,7 @@ private:
     
     // Configuration
     uint32_t m_systemCheckInterval = 30000;  // 30 seconds
-    uint32_t m_maxComponents = 10;           // Maximum number of components
+    uint32_t m_maxComponents = 20;           // Maximum number of components (increased for 8-pump system)
     
     // Statistics
     uint32_t m_totalExecutions = 0;

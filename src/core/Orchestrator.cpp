@@ -4,8 +4,14 @@
  */
 
 #include "Orchestrator.h"
+#include "../components/DHT22Component.h"
+#include "../components/TSL2561Component.h"
 #include "../components/PeristalticPumpComponent.h"
 #include "../components/TestHPeristalticComponent.h"
+#include "../components/MqttBroadcastComponent.h"
+#include "../components/WebServerComponent.h"
+#include "../components/ServoDimmerComponent.h"
+#include "../components/LightOrchestrator.h"
 
 Orchestrator::Orchestrator() {
     log(Logger::DEBUG, "Orchestrator created");
@@ -324,19 +330,47 @@ bool Orchestrator::initializeDefaultComponents() {
         }
     }
     
-    // Initialize Peristaltic Pump with default configuration (GPIO26, 40ml/s)
-    log(Logger::INFO, "Creating peristaltic pump...");
-    PeristalticPumpComponent* pump = new PeristalticPumpComponent("pump-1", "Nutrient Pump", m_storage, this);
+    // Initialize 8 Peristaltic Pumps with different GPIO pins and functions
+    struct PumpConfig {
+        String id;
+        String name;
+        String function;
+        uint8_t pin;
+    };
     
-    if (!pump->initialize(JsonDocument())) {  // Use default configuration
-        log(Logger::ERROR, "Failed to initialize pump component");
-        delete pump;
-        allSuccess = false;
-    } else {
-        if (!registerComponent(pump)) {
-            log(Logger::ERROR, "Failed to register pump component");
+    PumpConfig pumpConfigs[8] = {
+        {"pump-1", "Nutrient-A", "Base nutrients", 26},
+        {"pump-2", "Nutrient-B", "Micro nutrients", 27}, 
+        {"pump-3", "pH-Up", "pH adjustment alkaline", 14},
+        {"pump-4", "pH-Down", "pH adjustment acidic", 12},
+        {"pump-5", "CalMag", "Calcium/Magnesium supplement", 13},
+        {"pump-6", "Bloom", "Flowering nutrients", 25},
+        {"pump-7", "Root-Boost", "Root stimulator", 33},
+        {"pump-8", "Flush", "System flush solution", 32}
+    };
+    
+    for (int i = 0; i < 8; i++) {
+        log(Logger::INFO, String("Creating pump ") + (i+1) + ": " + pumpConfigs[i].name + " (" + pumpConfigs[i].function + ")");
+        PeristalticPumpComponent* pump = new PeristalticPumpComponent(pumpConfigs[i].id, pumpConfigs[i].name, m_storage, this);
+        
+        // Create custom config with specific GPIO pin
+        JsonDocument pumpConfig;
+        pumpConfig["pumpPin"] = pumpConfigs[i].pin;
+        pumpConfig["mlPerSecond"] = 40.0;  // Standard flow rate
+        pumpConfig["maxRuntimeMs"] = 60000; // 60 second safety timeout
+        
+        if (!pump->initialize(pumpConfig)) {
+            log(Logger::ERROR, String("Failed to initialize pump: ") + pumpConfigs[i].id);
             delete pump;
             allSuccess = false;
+        } else {
+            if (!registerComponent(pump)) {
+                log(Logger::ERROR, String("Failed to register pump: ") + pumpConfigs[i].id);
+                delete pump;
+                allSuccess = false;
+            } else {
+                log(Logger::INFO, String("Successfully registered pump: ") + pumpConfigs[i].id + " on GPIO" + pumpConfigs[i].pin);
+            }
         }
     }
     
@@ -352,6 +386,70 @@ bool Orchestrator::initializeDefaultComponents() {
         if (!registerComponent(testHarness)) {
             log(Logger::ERROR, "Failed to register test harness component");
             delete testHarness;
+            allSuccess = false;
+        }
+    }
+    
+    // Initialize MQTT Broadcast Component
+    log(Logger::INFO, "Creating MQTT broadcast component...");
+    MqttBroadcastComponent* mqttBroadcast = new MqttBroadcastComponent("mqtt-broadcast-1", "MQTT Component Broadcaster", m_storage, this);
+    
+    if (!mqttBroadcast->initialize(JsonDocument())) {  // Use default configuration
+        log(Logger::ERROR, "Failed to initialize MQTT broadcast component");
+        delete mqttBroadcast;
+        allSuccess = false;
+    } else {
+        if (!registerComponent(mqttBroadcast)) {
+            log(Logger::ERROR, "Failed to register MQTT broadcast component");
+            delete mqttBroadcast;
+            allSuccess = false;
+        }
+    }
+    
+    // Initialize Web Server Component (after WiFi is connected)
+    log(Logger::INFO, "Creating web server component...");
+    WebServerComponent* webServer = new WebServerComponent("web-server-1", "HTTP API Server", m_storage, this);
+    
+    if (!webServer->initialize(JsonDocument())) {  // Use default configuration
+        log(Logger::ERROR, "Failed to initialize web server component");
+        delete webServer;
+        allSuccess = false;
+    } else {
+        if (!registerComponent(webServer)) {
+            log(Logger::ERROR, "Failed to register web server component");
+            delete webServer;
+            allSuccess = false;
+        }
+    }
+    
+    // Initialize Servo Dimmer Component
+    log(Logger::INFO, "Creating servo dimmer component...");
+    ServoDimmerComponent* servoDimmer = new ServoDimmerComponent("servo-dimmer-1", "Lighting Servo Dimmer", m_storage, this);
+    
+    if (!servoDimmer->initialize(JsonDocument())) {  // Use default configuration
+        log(Logger::ERROR, "Failed to initialize servo dimmer component");
+        delete servoDimmer;
+        allSuccess = false;
+    } else {
+        if (!registerComponent(servoDimmer)) {
+            log(Logger::ERROR, "Failed to register servo dimmer component");
+            delete servoDimmer;
+            allSuccess = false;
+        }
+    }
+    
+    // Initialize Light Orchestrator Component (after servo dimmer and sensors)
+    log(Logger::INFO, "Creating light orchestrator component...");
+    LightOrchestrator* lightOrchestrator = new LightOrchestrator("light-orchestrator-1", "Intelligent Lighting Controller", m_storage, this);
+    
+    if (!lightOrchestrator->initialize(JsonDocument())) {  // Use default configuration
+        log(Logger::ERROR, "Failed to initialize light orchestrator component");
+        delete lightOrchestrator;
+        allSuccess = false;
+    } else {
+        if (!registerComponent(lightOrchestrator)) {
+            log(Logger::ERROR, "Failed to register light orchestrator component");
+            delete lightOrchestrator;
             allSuccess = false;
         }
     }

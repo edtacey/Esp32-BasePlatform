@@ -46,6 +46,9 @@ void setup() {
     // Check LittleFS partition and mounting
     checkLittleFS();
     
+    // Enable file logging to LittleFS
+    Logger::enableFileLogging(true, 50);  // 50KB max log file
+    
     // Connect to WiFi
     connectWiFi();
     

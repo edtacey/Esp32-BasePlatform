@@ -1,0 +1,638 @@
+#include "LightOrchestrator.h"
+#include "../core/Orchestrator.h"
+#include "ServoDimmerComponent.h"
+#include <ArduinoJson.h>
+#include <algorithm>
+
+LightOrchestrator::LightOrchestrator(const String& id, const String& name, ConfigStorage& storage, Orchestrator* orchestrator)
+    : BaseComponent(id, "LightOrchestrator", name, storage, orchestrator) {
+    // Initialize sensor sample pools
+    m_sensorSamplePools.resize(4); // Support up to 4 sensors
+    for (auto& pool : m_sensorSamplePools) {
+        pool.reserve(m_samplePoolSize);
+    }
+}
+
+LightOrchestrator::~LightOrchestrator() {
+    cleanup();
+}
+
+JsonDocument LightOrchestrator::getDefaultSchema() const {
+    JsonDocument schema;
+    
+    schema["type"] = "object";
+    
+    schema["properties"]["def_max_lumens"]["type"] = "number";
+    schema["properties"]["def_max_lumens"]["default"] = 1000.0;
+    schema["properties"]["def_max_lumens"]["minimum"] = 100.0;
+    schema["properties"]["def_max_lumens"]["maximum"] = 5000.0;
+    schema["properties"]["def_max_lumens"]["description"] = "Default maximum target lumens";
+    
+    schema["properties"]["def_min_lumens"]["type"] = "number";
+    schema["properties"]["def_min_lumens"]["default"] = 50.0;
+    schema["properties"]["def_min_lumens"]["minimum"] = 10.0;
+    schema["properties"]["def_min_lumens"]["maximum"] = 500.0;
+    schema["properties"]["def_min_lumens"]["description"] = "Default minimum target lumens";
+    
+    schema["properties"]["target_lumens"]["type"] = "number";
+    schema["properties"]["target_lumens"]["default"] = 500.0;
+    schema["properties"]["target_lumens"]["minimum"] = 50.0;
+    schema["properties"]["target_lumens"]["maximum"] = 1000.0;
+    schema["properties"]["target_lumens"]["description"] = "Initial target lumens";
+    
+    schema["properties"]["light_sensor_1"]["type"] = "string";
+    schema["properties"]["light_sensor_1"]["default"] = "tsl2561-1";
+    schema["properties"]["light_sensor_1"]["description"] = "First light sensor component ID";
+    
+    schema["properties"]["light_sensor_2"]["type"] = "string";
+    schema["properties"]["light_sensor_2"]["default"] = "";
+    schema["properties"]["light_sensor_2"]["description"] = "Second light sensor component ID (optional)";
+    
+    schema["properties"]["light_sensor_3"]["type"] = "string";
+    schema["properties"]["light_sensor_3"]["default"] = "";
+    schema["properties"]["light_sensor_3"]["description"] = "Third light sensor component ID (optional)";
+    
+    schema["properties"]["light_sensor_4"]["type"] = "string";
+    schema["properties"]["light_sensor_4"]["default"] = "";
+    schema["properties"]["light_sensor_4"]["description"] = "Fourth light sensor component ID (optional)";
+    
+    schema["properties"]["lighting_mode"]["type"] = "string";
+    schema["properties"]["lighting_mode"]["default"] = "morning";
+    schema["properties"]["lighting_mode"]["enum"] = JsonArray();
+    schema["properties"]["lighting_mode"]["enum"].add("morning");
+    schema["properties"]["lighting_mode"]["enum"].add("noon");
+    schema["properties"]["lighting_mode"]["enum"].add("twilight");
+    schema["properties"]["lighting_mode"]["enum"].add("night");
+    schema["properties"]["lighting_mode"]["description"] = "Current lighting mode";
+    
+    schema["properties"]["sample_pool_size"]["type"] = "integer";
+    schema["properties"]["sample_pool_size"]["default"] = 5;
+    schema["properties"]["sample_pool_size"]["minimum"] = 3;
+    schema["properties"]["sample_pool_size"]["maximum"] = 20;
+    schema["properties"]["sample_pool_size"]["description"] = "Number of sensor readings to average";
+    
+    schema["properties"]["increment_step"]["type"] = "number";
+    schema["properties"]["increment_step"]["default"] = 0.10;
+    schema["properties"]["increment_step"]["minimum"] = 0.01;
+    schema["properties"]["increment_step"]["maximum"] = 0.50;
+    schema["properties"]["increment_step"]["description"] = "Adjustment increment step (as percentage)";
+    
+    schema["properties"]["adjustment_interval_ms"]["type"] = "integer";
+    schema["properties"]["adjustment_interval_ms"]["default"] = 10000;
+    schema["properties"]["adjustment_interval_ms"]["minimum"] = 5000;
+    schema["properties"]["adjustment_interval_ms"]["maximum"] = 60000;
+    schema["properties"]["adjustment_interval_ms"]["description"] = "Time between adjustments (ms)";
+    
+    schema["properties"]["servo_dimmer_id"]["type"] = "string";
+    schema["properties"]["servo_dimmer_id"]["default"] = "servo-dimmer-1";
+    schema["properties"]["servo_dimmer_id"]["description"] = "Servo dimmer component ID to control";
+    
+    schema["properties"]["auto_adjustment"]["type"] = "boolean";
+    schema["properties"]["auto_adjustment"]["default"] = true;
+    schema["properties"]["auto_adjustment"]["description"] = "Enable automatic lighting adjustment";
+    
+    return schema;
+}
+
+bool LightOrchestrator::initialize(const JsonDocument& config) {
+    log(Logger::INFO, "Initializing light orchestrator component");
+    
+    if (!loadConfiguration(config)) {
+        setError("Failed to load configuration");
+        return false;
+    }
+    
+    if (!applyConfiguration(m_configuration)) {
+        setError("Failed to apply configuration");
+        return false;
+    }
+    
+    setState(ComponentState::INITIALIZING);
+    
+    // Validate sensor components
+    if (!validateSensorComponents()) {
+        log(Logger::WARNING, "Some sensor components could not be validated - will retry during execution");
+    }
+    
+    // Initialize sample pools
+    m_sensorSamplePools.clear();
+    m_sensorSamplePools.resize(m_lightSensors.size());
+    for (auto& pool : m_sensorSamplePools) {
+        pool.clear();
+        pool.reserve(m_samplePoolSize);
+    }
+    
+    // Set initial lighting mode target
+    m_targetLumens = m_modeLumens[static_cast<int>(m_lightingMode)];
+    
+    updateExecutionStats();
+    setState(ComponentState::READY);
+    
+    log(Logger::INFO, String("Light orchestrator initialized - Mode: ") + getLightingModeString(m_lightingMode) + 
+        ", Target: " + String(m_targetLumens) + " lumens, Sensors: " + String(m_lightSensors.size()));
+    
+    return true;
+}
+
+ExecutionResult LightOrchestrator::execute() {
+    ExecutionResult result;
+    result.success = false;
+    uint32_t startTime = millis();
+    
+    setState(ComponentState::EXECUTING);
+    
+    try {
+        // Update sensor readings
+        updateSensorReadings();
+        
+        // Calculate weighted average of sensor readings
+        float currentAverage = calculateWeightedAverage();
+        m_lastSensorAverage = currentAverage;
+        
+        // Log current sensor status
+        log(Logger::DEBUG, String("Sensor average: ") + String(currentAverage) + 
+            " lux, Target: " + String(m_targetLumens) + " lumens, Mode: " + getLightingModeString(m_lightingMode));
+        
+        // Check if adjustment is needed and allowed
+        if (m_autoAdjustmentEnabled && shouldAdjustLighting()) {
+            if (adjustServoDimmer()) {
+                m_totalAdjustments++;
+                m_lastAdjustmentMs = millis();
+                result.message = m_lastAdjustmentReason;
+            } else {
+                m_servoCommandErrors++;
+                result.message = "Servo adjustment failed";
+            }
+        }
+        
+        // Update sample pools
+        updateSamplePools();
+        
+        // Populate result data with internal parameters
+        result.data["target_lumens"] = m_targetLumens;
+        result.data["def_max_lumens"] = m_defMaxLumens;
+        result.data["def_min_lumens"] = m_defMinLumens;
+        result.data["lighting_mode"] = getLightingModeString(m_lightingMode);
+        result.data["current_sensor_index"] = m_currentSensorIndex;
+        result.data["sensor_average"] = currentAverage;
+        result.data["servo_position"] = m_currentServoPosition;
+        result.data["auto_adjustment_enabled"] = m_autoAdjustmentEnabled;
+        result.data["last_adjustment_ms"] = m_lastAdjustmentMs;
+        result.data["total_adjustments"] = m_totalAdjustments;
+        result.data["sensor_read_errors"] = m_sensorReadErrors;
+        result.data["servo_command_errors"] = m_servoCommandErrors;
+        result.data["max_recorded_reading"] = m_maxRecordedReading;
+        result.data["min_recorded_reading"] = m_minRecordedReading;
+        result.data["increment_step"] = m_incrementStep;
+        result.data["sample_pool_size"] = m_samplePoolSize;
+        
+        // Add sensor details
+        JsonArray sensorsArray = result.data["sensors"].to<JsonArray>();
+        for (size_t i = 0; i < m_lightSensors.size(); i++) {
+            const auto& sensor = m_lightSensors[i];
+            JsonObject sensorObj = sensorsArray.add<JsonObject>();
+            sensorObj["id"] = sensor.componentId;
+            sensorObj["name"] = sensor.name;
+            sensorObj["valid"] = sensor.isValid;
+            sensorObj["last_reading"] = sensor.lastReading;
+            sensorObj["weight"] = sensor.weight;
+            sensorObj["is_primary"] = (i == m_currentSensorIndex);
+            sensorObj["last_update_ms"] = sensor.lastUpdateMs;
+        }
+        
+        if (result.message.isEmpty()) {
+            result.message = String("Monitoring ") + String(m_lightSensors.size()) + 
+                           " sensors, avg: " + String(currentAverage) + " lux";
+        }
+        
+        result.success = true;
+        setState(ComponentState::READY);
+        
+    } catch (...) {
+        result.message = "Unexpected error during light orchestration";
+        setError(result.message);
+    }
+    
+    // Schedule next execution
+    setNextExecutionMs(millis() + m_adjustmentIntervalMs);
+    updateExecutionStats();
+    result.executionTimeMs = millis() - startTime;
+    
+    return result;
+}
+
+void LightOrchestrator::cleanup() {
+    m_lightSensors.clear();
+    m_sensorSamplePools.clear();
+    log(Logger::INFO, "Light orchestrator component cleaned up");
+}
+
+bool LightOrchestrator::setTargetLumens(float lumens) {
+    if (lumens < m_defMinLumens || lumens > m_defMaxLumens) {
+        log(Logger::WARNING, String("Target lumens out of range: ") + String(lumens));
+        return false;
+    }
+    
+    m_targetLumens = lumens;
+    log(Logger::INFO, String("Target lumens set to: ") + String(lumens));
+    
+    // Request immediate execution for adjustment
+    if (m_orchestrator) {
+        requestScheduleUpdate(m_componentId, millis() + 1000);
+    }
+    
+    return true;
+}
+
+bool LightOrchestrator::setLightingMode(LightingMode mode) {
+    m_lightingMode = mode;
+    m_targetLumens = m_modeLumens[static_cast<int>(mode)];
+    
+    log(Logger::INFO, String("Lighting mode set to: ") + getLightingModeString(mode) + 
+        ", Target lumens: " + String(m_targetLumens));
+    
+    // Request immediate execution for adjustment
+    if (m_orchestrator) {
+        requestScheduleUpdate(m_componentId, millis() + 1000);
+    }
+    
+    return true;
+}
+
+float LightOrchestrator::getAverageSensorReading() const {
+    return m_lastSensorAverage;
+}
+
+bool LightOrchestrator::applyConfiguration(const JsonDocument& config) {
+    m_defMaxLumens = config["def_max_lumens"] | 1000.0f;
+    m_defMinLumens = config["def_min_lumens"] | 50.0f;
+    m_targetLumens = config["target_lumens"] | 500.0f;
+    m_samplePoolSize = config["sample_pool_size"] | 5;
+    m_incrementStep = config["increment_step"] | 0.10f;
+    m_adjustmentIntervalMs = config["adjustment_interval_ms"] | 10000;
+    m_servoDimmerComponentId = config["servo_dimmer_id"] | "servo-dimmer-1";
+    m_autoAdjustmentEnabled = config["auto_adjustment"] | true;
+    
+    // Parse lighting mode
+    String modeStr = config["lighting_mode"] | "morning";
+    m_lightingMode = stringToLightingMode(modeStr);
+    
+    // Configure light sensors
+    m_lightSensors.clear();
+    String sensorIds[4] = {
+        config["light_sensor_1"] | "tsl2561-1",
+        config["light_sensor_2"] | "",
+        config["light_sensor_3"] | "",
+        config["light_sensor_4"] | ""
+    };
+    
+    for (int i = 0; i < 4; i++) {
+        if (!sensorIds[i].isEmpty()) {
+            LightSensor sensor;
+            sensor.componentId = sensorIds[i];
+            sensor.name = String("Light Sensor ") + String(i + 1);
+            sensor.weight = (i == 0) ? 1.0f : 0.8f; // Primary sensor gets higher weight
+            m_lightSensors.push_back(sensor);
+        }
+    }
+    
+    // Set mode-specific lumen targets
+    m_modeLumens[0] = 300.0f; // Morning
+    m_modeLumens[1] = 800.0f; // Noon  
+    m_modeLumens[2] = 200.0f; // Twilight
+    m_modeLumens[3] = 100.0f; // Night
+    
+    log(Logger::INFO, String("Configuration applied - Max: ") + String(m_defMaxLumens) + 
+        ", Min: " + String(m_defMinLumens) + ", Sensors: " + String(m_lightSensors.size()) + 
+        ", Mode: " + getLightingModeString(m_lightingMode));
+    
+    return true;
+}
+
+bool LightOrchestrator::validateSensorComponents() {
+    bool allValid = true;
+    
+    for (auto& sensor : m_lightSensors) {
+        BaseComponent* component = getComponentById(sensor.componentId);
+        if (component && (component->getType() == "TSL2561" || component->getType() == "DHT22")) {
+            sensor.isValid = true;
+            log(Logger::DEBUG, String("Validated sensor: ") + sensor.componentId);
+        } else {
+            sensor.isValid = false;
+            allValid = false;
+            log(Logger::WARNING, String("Invalid sensor component: ") + sensor.componentId);
+        }
+    }
+    
+    // Set primary sensor as first valid sensor
+    for (size_t i = 0; i < m_lightSensors.size(); i++) {
+        if (m_lightSensors[i].isValid) {
+            m_currentSensorIndex = i;
+            break;
+        }
+    }
+    
+    return allValid;
+}
+
+bool LightOrchestrator::updateSensorReadings() {
+    bool success = false;
+    uint32_t currentTime = millis();
+    
+    for (auto& sensor : m_lightSensors) {
+        if (!sensor.isValid) continue;
+        
+        JsonDocument sensorData = getSensorData(sensor.componentId);
+        if (!sensorData.isNull()) {
+            // Extract light reading (TSL2561 uses "lux", DHT22 might use "light")
+            float reading = 0.0f;
+            if (sensorData.containsKey("lux")) {
+                reading = sensorData["lux"] | 0.0f;
+            } else if (sensorData.containsKey("light")) {
+                reading = sensorData["light"] | 0.0f;
+            } else if (sensorData.containsKey("illuminance")) {
+                reading = sensorData["illuminance"] | 0.0f;
+            }
+            
+            if (isValidSensorReading(reading)) {
+                sensor.lastReading = reading;
+                sensor.lastUpdateMs = currentTime;
+                updateSensorStatistics(reading);
+                success = true;
+            }
+        }
+        
+        // Check for timeout
+        if ((currentTime - sensor.lastUpdateMs) > m_sensorTimeoutMs) {
+            sensor.isValid = false;
+            m_sensorReadErrors++;
+        }
+    }
+    
+    return success;
+}
+
+float LightOrchestrator::calculateWeightedAverage() {
+    float totalWeight = 0.0f;
+    float weightedSum = 0.0f;
+    
+    for (const auto& sensor : m_lightSensors) {
+        if (sensor.isValid && sensor.lastUpdateMs > 0) {
+            weightedSum += sensor.lastReading * sensor.weight;
+            totalWeight += sensor.weight;
+        }
+    }
+    
+    return (totalWeight > 0.0f) ? (weightedSum / totalWeight) : 0.0f;
+}
+
+bool LightOrchestrator::shouldAdjustLighting() {
+    uint32_t currentTime = millis();
+    
+    // Check timing constraint
+    if ((currentTime - m_lastAdjustmentMs) < m_adjustmentIntervalMs) {
+        return false;
+    }
+    
+    // Check if we have valid sensor data
+    if (m_lastSensorAverage <= 0.0f) {
+        return false;
+    }
+    
+    // NEW ALGORITHM: Incremental adjustment based on target lumens
+    // Target: 1400 lumens, Max: 1500, Min: 200
+    // Adjust by 20% each cycle until within 5% of target
+    
+    float targetLumens = 1400.0f;  // Fixed target lumens
+    float maxLumens = 1500.0f;     // Maximum lumens
+    float minLumens = 200.0f;      // Minimum lumens
+    
+    // Calculate current estimated lumens from servo position
+    float currentEstimatedLumens = (m_currentServoPosition / 100.0f) * maxLumens;
+    
+    // Check if adjustment is needed (more than 5% difference from target)
+    float difference = abs(currentEstimatedLumens - targetLumens);
+    float threshold = targetLumens * 0.05f; // 5% threshold
+    
+    // Update member variables for use in position calculation
+    m_targetLumens = targetLumens;
+    m_defMaxLumens = maxLumens;
+    m_defMinLumens = minLumens;
+    
+    log(Logger::DEBUG, String("Current: ") + String(currentEstimatedLumens) + 
+        " lumens, Target: " + String(targetLumens) + 
+        " lumens, Diff: " + String(difference) + 
+        " lumens, Threshold: " + String(threshold) + " lumens");
+    
+    return difference > threshold;
+    
+    /* COMMENTED OUT - Original algorithm
+    uint32_t currentTime = millis();
+    
+    // Check timing constraint
+    if ((currentTime - m_lastAdjustmentMs) < m_adjustmentIntervalMs) {
+        return false;
+    }
+    
+    // Check if we have valid sensor data
+    if (m_lastSensorAverage <= 0.0f) {
+        return false;
+    }
+    
+    // Calculate current estimated lumens from servo position
+    float currentEstimatedLumens = (m_currentServoPosition / 100.0f) * m_defMaxLumens;
+    
+    // Check if adjustment is needed (more than 10% difference)
+    float difference = abs(currentEstimatedLumens - m_targetLumens);
+    float threshold = m_targetLumens * 0.1f; // 10% threshold
+    
+    return difference > threshold;
+    */
+}
+
+bool LightOrchestrator::adjustServoDimmer() {
+    // NEW ALGORITHM: 20% incremental adjustment toward target
+    float currentPosition = m_currentServoPosition;
+    float currentEstimatedLumens = (currentPosition / 100.0f) * m_defMaxLumens;
+    
+    // Determine if we need to increase or decrease
+    float lumensError = m_targetLumens - currentEstimatedLumens;
+    
+    // Calculate 20% adjustment step
+    float adjustmentStep = 20.0f; // 20% of servo range
+    float newPosition = currentPosition;
+    
+    if (lumensError > 0) {
+        // Need more lumens - increase servo position by 20%
+        newPosition = currentPosition + adjustmentStep;
+    } else {
+        // Need fewer lumens - decrease servo position by 20%  
+        newPosition = currentPosition - adjustmentStep;
+    }
+    
+    // Constrain to valid servo range
+    newPosition = constrain(newPosition, 0.0f, 100.0f);
+    
+    // Calculate resulting lumens for logging
+    float newEstimatedLumens = (newPosition / 100.0f) * m_defMaxLumens;
+    
+    String reason = String("20% step: ") + String(currentPosition) + 
+                   "% to " + String(newPosition) + 
+                   "% (lumens: " + String(currentEstimatedLumens) + 
+                   " → " + String(newEstimatedLumens) + 
+                   ", target: " + String(m_targetLumens) + ")";
+    
+    if (sendServoCommand(newPosition)) {
+        logAdjustmentDetails(reason, currentPosition, newPosition);
+        m_currentServoPosition = newPosition;
+        m_lastAdjustmentReason = reason;
+        return true;
+    }
+    
+    return false;
+    
+    /* COMMENTED OUT - Original algorithm
+    float targetPosition = calculateTargetServoPosition();
+    float currentPosition = m_currentServoPosition;
+    
+    // Apply increment step limitation
+    float maxChange = 100.0f * m_incrementStep; // Convert percentage to position
+    float positionDelta = targetPosition - currentPosition;
+    
+    if (abs(positionDelta) > maxChange) {
+        positionDelta = (positionDelta > 0) ? maxChange : -maxChange;
+    }
+    
+    float newPosition = currentPosition + positionDelta;
+    newPosition = constrain(newPosition, 0.0f, 100.0f);
+    
+    String reason = String("Adjusting from ") + String(currentPosition) + 
+                   "% to " + String(newPosition) + "% (target: " + String(targetPosition) + "%)";
+    
+    if (sendServoCommand(newPosition)) {
+        logAdjustmentDetails(reason, currentPosition, newPosition);
+        m_currentServoPosition = newPosition;
+        m_lastAdjustmentReason = reason;
+        return true;
+    }
+    
+    return false;
+    */
+}
+
+float LightOrchestrator::calculateTargetServoPosition() {
+    // Simple proportional calculation: targetLumens / maxLumens * 100%
+    float position = (m_targetLumens / m_defMaxLumens) * 100.0f;
+    
+    // Consider sensor feedback for adjustment
+    if (m_lastSensorAverage > 0.0f) {
+        // If sensor reading is very low, increase position
+        // If sensor reading is very high, decrease position
+        // This is a simplified approach - more sophisticated algorithms could be used
+        float expectedReading = m_targetLumens * 0.5f; // Rough conversion factor
+        float readingError = expectedReading - m_lastSensorAverage;
+        float adjustment = (readingError / expectedReading) * 20.0f; // Max 20% adjustment
+        position += constrain(adjustment, -20.0f, 20.0f);
+    }
+    
+    return constrain(position, 0.0f, 100.0f);
+}
+
+bool LightOrchestrator::sendServoCommand(float position) {
+    if (!m_orchestrator) {
+        return false;
+    }
+    
+    // Find servo dimmer component
+    BaseComponent* servoComponent = getComponentById(m_servoDimmerComponentId);
+    if (!servoComponent) {
+        log(Logger::ERROR, String("Servo dimmer component not found: ") + m_servoDimmerComponentId);
+        return false;
+    }
+    
+    // Cast to ServoDimmerComponent and send command
+    ServoDimmerComponent* servoDimmer = static_cast<ServoDimmerComponent*>(servoComponent);
+    if (servoDimmer) {
+        return servoDimmer->setPosition(static_cast<int>(position));
+    }
+    
+    return false;
+}
+
+void LightOrchestrator::updateSamplePools() {
+    for (size_t i = 0; i < m_lightSensors.size() && i < m_sensorSamplePools.size(); i++) {
+        if (m_lightSensors[i].isValid) {
+            auto& pool = m_sensorSamplePools[i];
+            pool.push_back(m_lightSensors[i].lastReading);
+            
+            // Maintain pool size
+            if (pool.size() > m_samplePoolSize) {
+                pool.erase(pool.begin());
+            }
+        }
+    }
+}
+
+void LightOrchestrator::logAdjustmentDetails(const String& reason, float oldPosition, float newPosition) {
+    log(Logger::INFO, String("ADJUSTMENT: ") + reason + 
+        " | Sensor Avg: " + String(m_lastSensorAverage) + " lux" +
+        " | Target: " + String(m_targetLumens) + " lumens" +
+        " | Mode: " + getLightingModeString(m_lightingMode));
+}
+
+String LightOrchestrator::getLightingModeString(LightingMode mode) const {
+    switch (mode) {
+        case LightingMode::MORNING: return "morning";
+        case LightingMode::NOON: return "noon"; 
+        case LightingMode::TWILIGHT: return "twilight";
+        case LightingMode::NIGHT: return "night";
+        default: return "unknown";
+    }
+}
+
+LightOrchestrator::LightingMode LightOrchestrator::stringToLightingMode(const String& modeStr) const {
+    if (modeStr == "morning") return LightingMode::MORNING;
+    if (modeStr == "noon") return LightingMode::NOON;
+    if (modeStr == "twilight") return LightingMode::TWILIGHT;
+    if (modeStr == "night") return LightingMode::NIGHT;
+    return LightingMode::MORNING; // Default
+}
+
+bool LightOrchestrator::isValidSensorReading(float reading) const {
+    return reading >= 0.0f && reading <= 100000.0f; // Reasonable lux range
+}
+
+void LightOrchestrator::updateSensorStatistics(float reading) {
+    if (reading > m_maxRecordedReading) m_maxRecordedReading = reading;
+    if (reading < m_minRecordedReading) m_minRecordedReading = reading;
+}
+
+BaseComponent* LightOrchestrator::getComponentById(const String& componentId) {
+    if (!m_orchestrator) return nullptr;
+    
+    const std::vector<BaseComponent*>& components = m_orchestrator->getComponents();
+    for (BaseComponent* component : components) {
+        if (component && component->getId() == componentId) {
+            return component;
+        }
+    }
+    return nullptr;
+}
+
+JsonDocument LightOrchestrator::getSensorData(const String& componentId) {
+    BaseComponent* component = getComponentById(componentId);
+    if (!component) {
+        return JsonDocument();
+    }
+    
+    try {
+        ExecutionResult result = component->execute();
+        if (result.success) {
+            return result.data;
+        }
+    } catch (...) {
+        // Ignore execution errors
+    }
+    
+    return JsonDocument();
+}

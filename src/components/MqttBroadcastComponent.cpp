@@ -1,0 +1,291 @@
+#include "MqttBroadcastComponent.h"
+#include "../core/Orchestrator.h"
+
+MqttBroadcastComponent::MqttBroadcastComponent(const String& id, const String& name, ConfigStorage& storage, Orchestrator* orchestrator)
+    : BaseComponent(id, "MqttBroadcast", name, storage, orchestrator), m_mqttClient(m_wifiClient) {
+    log(Logger::DEBUG, "MqttBroadcastComponent created");
+}
+
+MqttBroadcastComponent::~MqttBroadcastComponent() {
+    cleanup();
+}
+
+JsonDocument MqttBroadcastComponent::getDefaultSchema() const {
+    JsonDocument schema;
+    schema["type"] = "object";
+    schema["title"] = "MQTT Broadcast Configuration";
+    schema["required"].add("mqttServer");
+    
+    JsonObject properties = schema["properties"].to<JsonObject>();
+    
+    // MQTT Server (required)
+    JsonObject serverProp = properties["mqttServer"].to<JsonObject>();
+    serverProp["type"] = "string";
+    serverProp["default"] = "192.168.1.80";
+    serverProp["description"] = "MQTT server IP address or hostname";
+    
+    // MQTT Port (optional)
+    JsonObject portProp = properties["mqttPort"].to<JsonObject>();
+    portProp["type"] = "integer";
+    portProp["minimum"] = 1;
+    portProp["maximum"] = 65535;
+    portProp["default"] = 1883;
+    portProp["description"] = "MQTT server port number";
+    
+    // Publish Cycle (optional)
+    JsonObject cycleProp = properties["publishCycleSec"].to<JsonObject>();
+    cycleProp["type"] = "integer";
+    cycleProp["minimum"] = 1;
+    cycleProp["maximum"] = 3600;
+    cycleProp["default"] = 15;
+    cycleProp["description"] = "Publish interval in seconds";
+    
+    // MQTT Root Topic (optional)
+    JsonObject rootProp = properties["mqttRoot"].to<JsonObject>();
+    rootProp["type"] = "string";
+    rootProp["default"] = "/EspOrch";
+    rootProp["maxLength"] = 100;
+    rootProp["description"] = "Base MQTT topic root";
+    
+    // MQTT Username (optional)
+    JsonObject userProp = properties["mqttUsername"].to<JsonObject>();
+    userProp["type"] = "string";
+    userProp["default"] = "";
+    userProp["maxLength"] = 50;
+    userProp["description"] = "MQTT username (leave empty if not needed)";
+    
+    // MQTT Password (optional)
+    JsonObject passProp = properties["mqttPassword"].to<JsonObject>();
+    passProp["type"] = "string";
+    passProp["default"] = "";
+    passProp["maxLength"] = 50;
+    passProp["description"] = "MQTT password (leave empty if not needed)";
+    
+    log(Logger::DEBUG, "Generated MQTT broadcast schema with server=192.168.1.80, cycle=15s");
+    return schema;
+}
+
+bool MqttBroadcastComponent::initialize(const JsonDocument& config) {
+    log(Logger::INFO, "Initializing MQTT broadcast component...");
+    setState(ComponentState::INITIALIZING);
+    
+    // Load configuration (will use defaults if config is empty)
+    if (!loadConfiguration(config)) {
+        setError("Failed to load configuration");
+        return false;
+    }
+    
+    // Apply the configuration
+    if (!applyConfiguration(getConfiguration())) {
+        setError("Failed to apply configuration");
+        return false;
+    }
+    
+    // Set up MQTT client
+    m_mqttClient.setServer(m_mqttServer.c_str(), m_mqttPort);
+    
+    // Set initial execution time
+    setNextExecutionMs(millis() + 5000);  // Start checking after 5 seconds
+    
+    setState(ComponentState::READY);
+    log(Logger::INFO, String("MQTT broadcast initialized - server: ") + m_mqttServer + 
+                      ":" + m_mqttPort + ", cycle: " + m_publishCycleSec + "s");
+    
+    return true;
+}
+
+bool MqttBroadcastComponent::applyConfiguration(const JsonDocument& config) {
+    log(Logger::DEBUG, "Applying MQTT broadcast configuration");
+    
+    // Extract MQTT server
+    if (config["mqttServer"].is<String>()) {
+        m_mqttServer = config["mqttServer"].as<String>();
+    }
+    
+    // Extract MQTT port
+    if (config["mqttPort"].is<uint16_t>()) {
+        m_mqttPort = config["mqttPort"].as<uint16_t>();
+    }
+    
+    // Extract publish cycle
+    if (config["publishCycleSec"].is<uint32_t>()) {
+        m_publishCycleSec = config["publishCycleSec"].as<uint32_t>();
+    }
+    
+    // Extract MQTT root
+    if (config["mqttRoot"].is<String>()) {
+        m_mqttRoot = config["mqttRoot"].as<String>();
+    }
+    
+    // Extract username and password
+    if (config["mqttUsername"].is<String>()) {
+        m_mqttUsername = config["mqttUsername"].as<String>();
+    }
+    
+    if (config["mqttPassword"].is<String>()) {
+        m_mqttPassword = config["mqttPassword"].as<String>();
+    }
+    
+    log(Logger::DEBUG, String("Config applied: server=") + m_mqttServer + 
+                       ":" + m_mqttPort + ", cycle=" + m_publishCycleSec + "s" +
+                       ", root=" + m_mqttRoot);
+    
+    return true;
+}
+
+ExecutionResult MqttBroadcastComponent::execute() {
+    ExecutionResult result;
+    uint32_t startTime = millis();
+    
+    setState(ComponentState::EXECUTING);
+    
+    // Check if it's time to publish
+    if (millis() - m_lastPublish >= (m_publishCycleSec * 1000)) {
+        // Ensure MQTT connection
+        if (ensureMqttConnection()) {
+            // Publish component data
+            publishComponentData();
+            m_lastPublish = millis();
+        }
+    }
+    
+    // Allow MQTT client to process
+    if (m_mqttConnected) {
+        m_mqttClient.loop();
+    }
+    
+    // Prepare output data
+    JsonDocument data;
+    data["timestamp"] = millis();
+    data["mqtt_server"] = m_mqttServer;
+    data["mqtt_port"] = m_mqttPort;
+    data["mqtt_connected"] = m_mqttConnected;
+    data["publish_cycle_sec"] = m_publishCycleSec;
+    data["mqtt_root"] = m_mqttRoot;
+    data["last_publish"] = m_lastPublish;
+    data["success"] = true;
+    
+    // Update execution interval (check every 5 seconds)
+    setNextExecutionMs(millis() + 5000);
+    
+    result.success = true;
+    result.data = data;
+    result.executionTimeMs = millis() - startTime;
+    
+    setState(ComponentState::READY);
+    return result;
+}
+
+bool MqttBroadcastComponent::ensureMqttConnection() {
+    // Check WiFi first
+    if (WiFi.status() != WL_CONNECTED) {
+        if (m_mqttConnected) {
+            log(Logger::WARNING, "WiFi disconnected - MQTT connection lost");
+            m_mqttConnected = false;
+        }
+        return false;
+    }
+    
+    // Check MQTT connection
+    if (m_mqttClient.connected()) {
+        if (!m_mqttConnected) {
+            m_mqttConnected = true;
+            log(Logger::INFO, "MQTT connection restored");
+        }
+        return true;
+    }
+    
+    // Try to reconnect if enough time has passed
+    if (millis() - m_lastReconnectAttempt > m_reconnectInterval) {
+        m_lastReconnectAttempt = millis();
+        return connectToMqtt();
+    }
+    
+    return false;
+}
+
+bool MqttBroadcastComponent::connectToMqtt() {
+    log(Logger::DEBUG, String("Attempting MQTT connection to ") + m_mqttServer + ":" + m_mqttPort);
+    
+    // Create unique client ID
+    String clientId = "EspOrch-" + WiFi.macAddress();
+    clientId.replace(":", "");
+    
+    bool connected;
+    if (m_mqttUsername.length() > 0) {
+        connected = m_mqttClient.connect(clientId.c_str(), m_mqttUsername.c_str(), m_mqttPassword.c_str());
+    } else {
+        connected = m_mqttClient.connect(clientId.c_str());
+    }
+    
+    if (connected) {
+        m_mqttConnected = true;
+        log(Logger::INFO, String("MQTT connected as ") + clientId);
+        return true;
+    } else {
+        m_mqttConnected = false;
+        log(Logger::WARNING, String("MQTT connection failed, state: ") + m_mqttClient.state());
+        return false;
+    }
+}
+
+void MqttBroadcastComponent::publishComponentData() {
+    if (!m_orchestrator) {
+        log(Logger::WARNING, "No orchestrator reference - cannot publish component data");
+        return;
+    }
+    
+    const std::vector<BaseComponent*>& components = m_orchestrator->getComponents();
+    int publishCount = 0;
+    
+    log(Logger::DEBUG, String("Publishing data for ") + components.size() + " components");
+    
+    for (BaseComponent* component : components) {
+        if (component && component != this) {  // Don't publish our own data
+            publishSingleComponent(component);
+            publishCount++;
+        }
+    }
+    
+    log(Logger::INFO, String("Published MQTT data for ") + publishCount + " components");
+}
+
+void MqttBroadcastComponent::publishSingleComponent(BaseComponent* component) {
+    if (!component) return;
+    
+    // Execute the component to get fresh data
+    ExecutionResult result = component->execute();
+    if (!result.success || result.data.isNull()) {
+        return;  // Skip if no data available
+    }
+    
+    // Create topic: /EspOrch/{ComponentID}
+    String topic = getComponentTopic(component->getId());
+    
+    // Serialize data to JSON string
+    String payload;
+    serializeJson(result.data, payload);
+    
+    // Publish to MQTT
+    bool published = m_mqttClient.publish(topic.c_str(), payload.c_str(), false);  // Not retained
+    
+    if (published) {
+        log(Logger::DEBUG, String("Published ") + component->getId() + " to " + topic);
+    } else {
+        log(Logger::WARNING, String("Failed to publish ") + component->getId() + " to " + topic);
+    }
+}
+
+String MqttBroadcastComponent::getComponentTopic(const String& componentId) const {
+    return m_mqttRoot + "/" + componentId;
+}
+
+void MqttBroadcastComponent::cleanup() {
+    log(Logger::DEBUG, "Cleaning up MQTT broadcast component");
+    
+    if (m_mqttClient.connected()) {
+        m_mqttClient.disconnect();
+    }
+    
+    m_mqttConnected = false;
+}

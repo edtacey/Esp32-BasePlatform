@@ -14,44 +14,44 @@ TestHPeristalticComponent::~TestHPeristalticComponent() {
 JsonDocument TestHPeristalticComponent::getDefaultSchema() const {
     JsonDocument schema;
     schema["type"] = "object";
-    schema["title"] = "Peristaltic Pump Test Harness Configuration";
-    schema["required"].add("doseAmtMls");
+    schema["title"] = "Multi-Pump Test Harness Configuration";
+    schema["required"].add("minDoseVolume");
+    schema["required"].add("maxDoseVolume");
     schema["required"].add("doseFreqSec");
-    schema["required"].add("dosagePump1ID");
     
     JsonObject properties = schema["properties"].to<JsonObject>();
     
-    // Dose amount (required)
-    JsonObject doseAmt = properties["doseAmtMls"].to<JsonObject>();
-    doseAmt["type"] = "number";
-    doseAmt["minimum"] = 0.1;
-    doseAmt["maximum"] = 1000.0;
-    doseAmt["default"] = 10.0;
-    doseAmt["description"] = "Volume to dose per cycle (ml)";
+    // Minimum dose volume (required)
+    JsonObject minDose = properties["minDoseVolume"].to<JsonObject>();
+    minDose["type"] = "number";
+    minDose["minimum"] = 1.0;
+    minDose["maximum"] = 50.0;
+    minDose["default"] = 5.0;
+    minDose["description"] = "Minimum random dose volume (ml)";
+    
+    // Maximum dose volume (required)
+    JsonObject maxDose = properties["maxDoseVolume"].to<JsonObject>();
+    maxDose["type"] = "number";
+    maxDose["minimum"] = 10.0;
+    maxDose["maximum"] = 500.0;
+    maxDose["default"] = 100.0;
+    maxDose["description"] = "Maximum random dose volume (ml)";
     
     // Dose frequency (required)
     JsonObject doseFreq = properties["doseFreqSec"].to<JsonObject>();
     doseFreq["type"] = "integer";
-    doseFreq["minimum"] = 1;
-    doseFreq["maximum"] = 3600;
-    doseFreq["default"] = 30;
-    doseFreq["description"] = "Interval between doses (seconds)";
+    doseFreq["minimum"] = 5;
+    doseFreq["maximum"] = 300;
+    doseFreq["default"] = 20;
+    doseFreq["description"] = "Interval between random doses (seconds)";
     
-    // Primary pump ID (required)
-    JsonObject pump1ID = properties["dosagePump1ID"].to<JsonObject>();
-    pump1ID["type"] = "string";
-    pump1ID["default"] = "pump-1";
-    pump1ID["maxLength"] = 32;
-    pump1ID["description"] = "Component ID of primary pump";
+    // Random dosing enabled
+    JsonObject randomMode = properties["randomDosing"].to<JsonObject>();
+    randomMode["type"] = "boolean";
+    randomMode["default"] = true;
+    randomMode["description"] = "Enable random pump selection and volume dosing";
     
-    // Secondary pump ID (optional)
-    JsonObject pump2ID = properties["dosagePump2ID"].to<JsonObject>();
-    pump2ID["type"] = "string";
-    pump2ID["default"] = "";
-    pump2ID["maxLength"] = 32;
-    pump2ID["description"] = "Component ID of secondary pump (optional)";
-    
-    log(Logger::DEBUG, "Generated test harness schema with 10ml doses every 30s");
+    log(Logger::DEBUG, "Generated multi-pump test harness schema");
     return schema;
 }
 
@@ -78,19 +78,22 @@ bool TestHPeristalticComponent::initialize(const JsonDocument& config) {
     setNextExecutionMs(millis() + 5000);  // Start checking after 5 seconds
     
     setState(ComponentState::READY);
-    log(Logger::INFO, String("Test harness initialized - ") + m_doseAmtMls + 
-                      "ml every " + m_doseFreqSec + "s to pumps: " + 
-                      m_dosagePump1ID + (m_dosagePump2ID.length() > 0 ? ", " + m_dosagePump2ID : ""));
+    log(Logger::INFO, String("Multi-pump test harness initialized - ") + m_minDoseVolume + 
+                      "-" + m_maxDoseVolume + "ml random doses every " + m_doseFreqSec + "s");
     
     return true;
 }
 
 bool TestHPeristalticComponent::applyConfiguration(const JsonDocument& config) {
-    log(Logger::DEBUG, "Applying test harness configuration");
+    log(Logger::DEBUG, "Applying multi-pump test harness configuration");
     
-    // Extract dose amount
-    if (config["doseAmtMls"].is<float>()) {
-        m_doseAmtMls = config["doseAmtMls"].as<float>();
+    // Extract dose volume range
+    if (config["minDoseVolume"].is<float>()) {
+        m_minDoseVolume = config["minDoseVolume"].as<float>();
+    }
+    
+    if (config["maxDoseVolume"].is<float>()) {
+        m_maxDoseVolume = config["maxDoseVolume"].as<float>();
     }
     
     // Extract dose frequency
@@ -98,19 +101,15 @@ bool TestHPeristalticComponent::applyConfiguration(const JsonDocument& config) {
         m_doseFreqSec = config["doseFreqSec"].as<uint32_t>();
     }
     
-    // Extract pump IDs
-    if (config["dosagePump1ID"].is<String>()) {
-        m_dosagePump1ID = config["dosagePump1ID"].as<String>();
+    // Extract random dosing mode
+    if (config["randomDosing"].is<bool>()) {
+        m_randomDosing = config["randomDosing"].as<bool>();
     }
     
-    if (config["dosagePump2ID"].is<String>()) {
-        m_dosagePump2ID = config["dosagePump2ID"].as<String>();
-    }
-    
-    log(Logger::DEBUG, String("Config applied: dose=") + m_doseAmtMls + "ml" +
+    log(Logger::DEBUG, String("Config applied: minDose=") + m_minDoseVolume + "ml" +
+                       ", maxDose=" + m_maxDoseVolume + "ml" +
                        ", freq=" + m_doseFreqSec + "s" +
-                       ", pump1=" + m_dosagePump1ID +
-                       ", pump2=" + m_dosagePump2ID);
+                       ", random=" + (m_randomDosing ? "enabled" : "disabled"));
     
     return true;
 }
@@ -128,14 +127,25 @@ ExecutionResult TestHPeristalticComponent::execute() {
     JsonDocument data;
     data["timestamp"] = millis();
     data["test_running"] = m_testRunning;
-    data["dose_amount_ml"] = m_doseAmtMls;
+    data["random_dosing"] = m_randomDosing;
+    data["min_dose_volume_ml"] = m_minDoseVolume;
+    data["max_dose_volume_ml"] = m_maxDoseVolume;
     data["dose_frequency_sec"] = m_doseFreqSec;
-    data["pump1_id"] = m_dosagePump1ID;
-    data["pump2_id"] = m_dosagePump2ID;
     data["dose_attempts"] = m_doseAttempts;
     data["successful_doses"] = m_successfulDoses;
     data["failed_doses"] = m_failedDoses;
     data["total_volume_ml"] = m_totalVolumeDispensed;
+    
+    // Add pump configuration status
+    JsonArray pumps = data["pumps"].to<JsonArray>();
+    for (int i = 0; i < 8; i++) {
+        JsonObject pump = pumps.add<JsonObject>();
+        pump["id"] = m_pumps[i].pumpId;
+        pump["function"] = m_pumps[i].functionName;
+        pump["enabled"] = m_pumps[i].enabled;
+        pump["available"] = isPumpAvailable(m_pumps[i].pumpId);
+    }
+    
     data["success"] = true;
     
     if (m_testRunning && m_nextDoseTime > 0) {
@@ -162,8 +172,15 @@ void TestHPeristalticComponent::updateTestState() {
     
     // Check if it's time for next dose
     if (m_nextDoseTime > 0 && currentTime >= m_nextDoseTime) {
-        if (triggerManualDose()) {
-            log(Logger::INFO, String("Automated dose triggered - ") + m_doseAmtMls + "ml");
+        if (m_randomDosing) {
+            if (triggerRandomDose()) {
+                float volume = generateRandomVolume();
+                log(Logger::INFO, String("Random dose triggered - ") + volume + "ml");
+            }
+        } else {
+            if (triggerManualDose()) {
+                log(Logger::INFO, String("Manual dose triggered"));
+            }
         }
         
         // Schedule next dose
@@ -178,14 +195,24 @@ bool TestHPeristalticComponent::startTest() {
     }
     
     // Validate pump components exist
-    if (m_dosagePump1ID.length() > 0 && (!m_orchestrator || !m_orchestrator->findComponent(m_dosagePump1ID))) {
-        log(Logger::ERROR, "Primary pump component not found: " + m_dosagePump1ID);
+    int validPumps = 0;
+    for (int i = 0; i < 8; i++) {
+        if (m_pumps[i].enabled) {
+            if (!m_orchestrator || !m_orchestrator->findComponent(m_pumps[i].pumpId)) {
+                log(Logger::WARNING, String("Pump component not found: ") + m_pumps[i].pumpId + " (" + m_pumps[i].functionName + ")");
+                m_pumps[i].enabled = false;
+            } else {
+                validPumps++;
+            }
+        }
+    }
+    
+    if (validPumps == 0) {
+        log(Logger::ERROR, "No valid pump components found - cannot start test");
         return false;
     }
-    if (m_dosagePump2ID.length() > 0 && (!m_orchestrator || !m_orchestrator->findComponent(m_dosagePump2ID))) {
-        log(Logger::ERROR, "Secondary pump component not found: " + m_dosagePump2ID);
-        return false;
-    }
+    
+    log(Logger::INFO, String("Found ") + validPumps + " valid pumps for testing");
     
     m_testRunning = true;
     m_nextDoseTime = millis() + (m_doseFreqSec * 1000);  // First dose after frequency interval
@@ -210,44 +237,36 @@ bool TestHPeristalticComponent::stopTest() {
 }
 
 bool TestHPeristalticComponent::triggerManualDose() {
-    if (m_dosagePump1ID.length() == 0) {
-        log(Logger::ERROR, "No pump ID configured");
-        return false;
-    }
+    log(Logger::INFO, "Manual dose triggered - using first available pump");
     
-    bool success = true;
-    m_doseAttempts++;
-    
-    // Dose pump 1
-    if (m_dosagePump1ID.length() > 0) {
-        if (triggerPumpDose(m_dosagePump1ID)) {
-            m_totalVolumeDispensed += m_doseAmtMls;
-        } else {
-            success = false;
+    // Find first available pump
+    for (int i = 0; i < 8; i++) {
+        if (m_pumps[i].enabled && isPumpAvailable(m_pumps[i].pumpId)) {
+            float volume = (m_minDoseVolume + m_maxDoseVolume) / 2.0; // Use average volume for manual dose
+            
+            m_doseAttempts++;
+            bool success = triggerPumpDose(m_pumps[i].pumpId, volume);
+            
+            if (success) {
+                m_successfulDoses++;
+                m_totalVolumeDispensed += volume;
+                m_lastDoseTime = millis();
+                log(Logger::INFO, String("Manual dose completed: ") + m_pumps[i].pumpId + " (" + m_pumps[i].functionName + ") - " + volume + "ml");
+            } else {
+                m_failedDoses++;
+            }
+            
+            return success;
         }
     }
     
-    // Dose pump 2 if configured
-    if (m_dosagePump2ID.length() > 0) {
-        if (triggerPumpDose(m_dosagePump2ID)) {
-            m_totalVolumeDispensed += m_doseAmtMls;
-        } else {
-            success = false;
-        }
-    }
-    
-    if (success) {
-        m_successfulDoses++;
-        m_lastDoseTime = millis();
-    } else {
-        m_failedDoses++;
-    }
-    
-    return success;
+    log(Logger::WARNING, "No available pumps for manual dose");
+    m_failedDoses++;
+    return false;
 }
 
-bool TestHPeristalticComponent::triggerPumpDose(const String& pumpId) {
-    log(Logger::INFO, String("Triggering dose on pump ") + pumpId + ": " + m_doseAmtMls + "ml");
+bool TestHPeristalticComponent::triggerPumpDose(const String& pumpId, float volume) {
+    log(Logger::INFO, String("Triggering dose on pump ") + pumpId + ": " + volume + "ml");
     
     // Find the pump component by ID
     if (!m_orchestrator) {
@@ -271,9 +290,9 @@ bool TestHPeristalticComponent::triggerPumpDose(const String& pumpId) {
     PeristalticPumpComponent* pump = static_cast<PeristalticPumpComponent*>(pumpComponent);
     
     // Call the actual dose method
-    bool success = pump->dose(m_doseAmtMls);
+    bool success = pump->dose(volume);
     if (success) {
-        log(Logger::INFO, String("Successfully started dosing ") + m_doseAmtMls + "ml on " + pumpId);
+        log(Logger::INFO, String("Successfully started dosing ") + volume + "ml on " + pumpId);
     } else {
         log(Logger::ERROR, String("Failed to start dosing on ") + pumpId);
     }
@@ -281,6 +300,83 @@ bool TestHPeristalticComponent::triggerPumpDose(const String& pumpId) {
     return success;
 }
 
+bool TestHPeristalticComponent::triggerRandomDose() {
+    log(Logger::DEBUG, "Triggering random dose on available pumps");
+    
+    // Create list of available pumps
+    String availablePumps[8];
+    int availableCount = 0;
+    
+    for (int i = 0; i < 8; i++) {
+        if (m_pumps[i].enabled && isPumpAvailable(m_pumps[i].pumpId)) {
+            availablePumps[availableCount] = m_pumps[i].pumpId;
+            availableCount++;
+        }
+    }
+    
+    if (availableCount == 0) {
+        log(Logger::WARNING, "No available pumps for random dosing");
+        m_failedDoses++;
+        return false;
+    }
+    
+    // Select random pump
+    int randomIndex = random(0, availableCount);
+    String selectedPumpId = availablePumps[randomIndex];
+    
+    // Generate random volume
+    float volume = generateRandomVolume();
+    
+    // Find function name for logging
+    String functionName = "Unknown";
+    for (int i = 0; i < 8; i++) {
+        if (m_pumps[i].pumpId == selectedPumpId) {
+            functionName = m_pumps[i].functionName;
+            break;
+        }
+    }
+    
+    log(Logger::INFO, String("Random dose: ") + selectedPumpId + " (" + functionName + ") - " + volume + "ml");
+    
+    // Trigger the dose
+    m_doseAttempts++;
+    bool success = triggerPumpDose(selectedPumpId, volume);
+    
+    if (success) {
+        m_successfulDoses++;
+        m_totalVolumeDispensed += volume;
+        m_lastDoseTime = millis();
+    } else {
+        m_failedDoses++;
+    }
+    
+    return success;
+}
+
+bool TestHPeristalticComponent::isPumpAvailable(const String& pumpId) {
+    if (!m_orchestrator) {
+        return false;
+    }
+    
+    BaseComponent* pumpComponent = m_orchestrator->findComponent(pumpId);
+    if (!pumpComponent) {
+        return false;
+    }
+    
+    // Check if component is a PeristalticPumpComponent by type
+    if (pumpComponent->getType() != "PeristalticPump") {
+        return false;
+    }
+    
+    // Safe cast and check if pump is currently running
+    PeristalticPumpComponent* pump = static_cast<PeristalticPumpComponent*>(pumpComponent);
+    return !pump->isPumping();
+}
+
+float TestHPeristalticComponent::generateRandomVolume() {
+    // Generate random volume between min and max
+    return m_minDoseVolume + (random(0, 1000) / 1000.0) * (m_maxDoseVolume - m_minDoseVolume);
+}
 
 void TestHPeristalticComponent::resetTestStats() {
     m_doseAttempts = 0;

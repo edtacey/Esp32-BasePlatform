@@ -1,0 +1,353 @@
+#include "ServoDimmerComponent.h"
+#include "../core/Orchestrator.h"
+#include <ArduinoJson.h>
+
+ServoDimmerComponent::ServoDimmerComponent(const String& id, const String& name, ConfigStorage& storage, Orchestrator* orchestrator)
+    : BaseComponent(id, "ServoDimmer", name, storage, orchestrator) {
+    m_httpClient.setTimeout(m_httpTimeoutMs);
+}
+
+ServoDimmerComponent::~ServoDimmerComponent() {
+    cleanup();
+}
+
+JsonDocument ServoDimmerComponent::getDefaultSchema() const {
+    JsonDocument schema;
+    
+    schema["type"] = "object";
+    schema["properties"]["device_ip"]["type"] = "string";
+    schema["properties"]["device_ip"]["default"] = "192.168.1.157";
+    schema["properties"]["device_ip"]["description"] = "IP address of servo dimmer device";
+    
+    schema["properties"]["device_port"]["type"] = "integer";
+    schema["properties"]["device_port"]["default"] = 80;
+    schema["properties"]["device_port"]["minimum"] = 1;
+    schema["properties"]["device_port"]["maximum"] = 65535;
+    schema["properties"]["device_port"]["description"] = "HTTP port of servo dimmer device";
+    
+    schema["properties"]["base_lumens"]["type"] = "number";
+    schema["properties"]["base_lumens"]["default"] = 1000.0;
+    schema["properties"]["base_lumens"]["minimum"] = 0.0;
+    schema["properties"]["base_lumens"]["maximum"] = 10000.0;
+    schema["properties"]["base_lumens"]["description"] = "Maximum lumens output at 100% position";
+    
+    schema["properties"]["check_interval_ms"]["type"] = "integer";
+    schema["properties"]["check_interval_ms"]["default"] = 30000;
+    schema["properties"]["check_interval_ms"]["minimum"] = 5000;
+    schema["properties"]["check_interval_ms"]["maximum"] = 300000;
+    schema["properties"]["check_interval_ms"]["description"] = "Interval between position checks/updates (ms)";
+    
+    schema["properties"]["http_timeout_ms"]["type"] = "integer";
+    schema["properties"]["http_timeout_ms"]["default"] = 5000;
+    schema["properties"]["http_timeout_ms"]["minimum"] = 1000;
+    schema["properties"]["http_timeout_ms"]["maximum"] = 30000;
+    schema["properties"]["http_timeout_ms"]["description"] = "HTTP request timeout (ms)";
+    
+    schema["properties"]["enable_movement"]["type"] = "boolean";
+    schema["properties"]["enable_movement"]["default"] = true;
+    schema["properties"]["enable_movement"]["description"] = "Allow servo position changes";
+    
+    schema["properties"]["initial_position"]["type"] = "integer";
+    schema["properties"]["initial_position"]["default"] = 0;
+    schema["properties"]["initial_position"]["minimum"] = 0;
+    schema["properties"]["initial_position"]["maximum"] = 100;
+    schema["properties"]["initial_position"]["description"] = "Initial servo position (0-100%)";
+    
+    return schema;
+}
+
+bool ServoDimmerComponent::initialize(const JsonDocument& config) {
+    log(Logger::INFO, "Initializing servo dimmer component");
+    
+    if (!loadConfiguration(config)) {
+        setError("Failed to load configuration");
+        return false;
+    }
+    
+    if (!applyConfiguration(m_configuration)) {
+        setError("Failed to apply configuration");
+        return false;
+    }
+    
+    setState(ComponentState::INITIALIZING);
+    
+    // Test initial communication
+    if (!queryDeviceStatus()) {
+        log(Logger::WARNING, "Initial device communication failed - will retry during execution");
+    }
+    
+    // Set initial position if configured
+    int initialPosition = m_configuration["initial_position"] | 0;
+    if (initialPosition > 0 && m_enableMovement) {
+        m_targetPosition = initialPosition;
+        log(Logger::INFO, "Setting initial position to " + String(initialPosition) + "%");
+    }
+    
+    updateExecutionStats();
+    setState(ComponentState::READY);
+    
+    log(Logger::INFO, "Servo dimmer component initialized - Device: " + m_deviceIP + ":" + String(m_devicePort));
+    return true;
+}
+
+ExecutionResult ServoDimmerComponent::execute() {
+    ExecutionResult result;
+    result.success = false;
+    uint32_t startTime = millis();
+    
+    setState(ComponentState::EXECUTING);
+    
+    try {
+        // Check if it's time for status update
+        if (isTimeToCheck()) {
+            log(Logger::DEBUG, "Performing scheduled status check");
+            
+            if (queryDeviceStatus()) {
+                result.data["device_online"] = true;
+                result.data["device_status"]["wifi"] = m_deviceWifiStatus;
+                result.data["device_status"]["rssi"] = m_deviceRSSI;
+                result.data["device_status"]["uptime"] = m_deviceUptime;
+                
+                m_lastStatusCheck = millis();
+            } else {
+                result.data["device_online"] = false;
+                result.message = "Device communication failed";
+            }
+        }
+        
+        // Handle pending movement
+        if (m_enableMovement && m_targetPosition != m_currentPosition && !m_movementInProgress) {
+            log(Logger::INFO, "Moving servo from " + String(m_currentPosition) + "% to " + String(m_targetPosition) + "%");
+            
+            m_movementInProgress = true;
+            
+            if (sendPositionCommand(m_targetPosition)) {
+                m_currentPosition = m_targetPosition;
+                m_lastMovementTime = millis();
+                m_movementInProgress = false;
+                
+                log(Logger::INFO, "Servo moved to " + String(m_currentPosition) + "% (" + String(getCurrentLumens()) + " lumens)");
+                result.message = "Position updated to " + String(m_currentPosition) + "%";
+            } else {
+                m_movementInProgress = false;
+                result.message = "Movement command failed";
+                setState(ComponentState::ERROR);
+                result.success = false;
+                result.executionTimeMs = millis() - startTime;
+                return result;
+            }
+        }
+        
+        // Update result data
+        result.data["current_position"] = m_currentPosition;
+        result.data["target_position"] = m_targetPosition;
+        result.data["current_lumens"] = getCurrentLumens();
+        result.data["device_online"] = m_deviceOnline;
+        result.data["movement_in_progress"] = m_movementInProgress;
+        result.data["communication_errors"] = m_communicationErrors;
+        result.data["last_movement_ms"] = m_lastMovementTime;
+        
+        if (result.message.isEmpty()) {
+            result.message = "Status: " + String(m_currentPosition) + "% (" + String(getCurrentLumens()) + " lumens)";
+        }
+        
+        result.success = true;
+        setState(ComponentState::READY);
+        
+    } catch (...) {
+        result.message = "Unexpected error during execution";
+        setError(result.message);
+    }
+    
+    updateMovementSchedule();
+    updateExecutionStats();
+    result.executionTimeMs = millis() - startTime;
+    
+    return result;
+}
+
+void ServoDimmerComponent::cleanup() {
+    m_httpClient.end();
+    log(Logger::INFO, "Servo dimmer component cleaned up");
+}
+
+bool ServoDimmerComponent::setLumens(float lumens) {
+    if (lumens < 0.0f || lumens > m_baseLumens) {
+        log(Logger::WARNING, "Invalid lumens value: " + String(lumens));
+        return false;
+    }
+    
+    int newPosition = calculatePositionFromLumens(lumens);
+    return setPosition(newPosition);
+}
+
+bool ServoDimmerComponent::setPosition(int position) {
+    if (!validatePosition(position)) {
+        log(Logger::WARNING, "Invalid position: " + String(position));
+        return false;
+    }
+    
+    if (!m_enableMovement) {
+        log(Logger::WARNING, "Movement disabled in configuration");
+        return false;
+    }
+    
+    if (m_movementInProgress) {
+        log(Logger::WARNING, "Movement already in progress");
+        return false;
+    }
+    
+    m_targetPosition = position;
+    log(Logger::INFO, "Target position set to " + String(position) + "% (" + String(calculateLumensFromPosition(position)) + " lumens)");
+    
+    // Request immediate execution if orchestrator is available
+    if (m_orchestrator) {
+        requestScheduleUpdate(m_componentId, millis() + 100); // Schedule in 100ms
+    }
+    
+    return true;
+}
+
+float ServoDimmerComponent::getCurrentLumens() const {
+    return calculateLumensFromPosition(m_currentPosition);
+}
+
+bool ServoDimmerComponent::applyConfiguration(const JsonDocument& config) {
+    m_deviceIP = config["device_ip"] | "192.168.1.157";
+    m_devicePort = config["device_port"] | 80;
+    m_baseLumens = config["base_lumens"] | 1000.0f;
+    m_checkIntervalMs = config["check_interval_ms"] | 30000;
+    m_httpTimeoutMs = config["http_timeout_ms"] | 5000;
+    m_enableMovement = config["enable_movement"] | true;
+    
+    m_httpClient.setTimeout(m_httpTimeoutMs);
+    
+    log(Logger::INFO, "Configuration applied - Device: " + m_deviceIP + ":" + String(m_devicePort) + 
+        ", Base lumens: " + String(m_baseLumens) + ", Check interval: " + String(m_checkIntervalMs) + "ms");
+    
+    return true;
+}
+
+bool ServoDimmerComponent::queryDeviceStatus() {
+    String url = buildStatusURL();
+    
+    m_httpClient.begin(m_wifiClient, url);
+    m_httpClient.addHeader("Content-Type", "application/json");
+    
+    int httpCode = m_httpClient.GET();
+    
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = m_httpClient.getString();
+        
+        JsonDocument statusDoc;
+        DeserializationError error = deserializeJson(statusDoc, payload);
+        
+        if (!error) {
+            m_currentPosition = statusDoc["position"] | m_currentPosition;
+            m_deviceWifiStatus = statusDoc["wifi"] | "Unknown";
+            m_deviceRSSI = statusDoc["rssi"] | 0;
+            m_deviceUptime = statusDoc["uptime"] | 0;
+            m_deviceOnline = true;
+            
+            log(Logger::DEBUG, "Status updated - Position: " + String(m_currentPosition) + "%, RSSI: " + String(m_deviceRSSI) + "dBm");
+            
+            m_httpClient.end();
+            return true;
+        } else {
+            log(Logger::ERROR, "Failed to parse status JSON: " + String(error.c_str()));
+        }
+    } else {
+        handleHttpError(httpCode, "status query");
+    }
+    
+    m_deviceOnline = false;
+    m_httpClient.end();
+    return false;
+}
+
+bool ServoDimmerComponent::sendPositionCommand(int position) {
+    if (!validatePosition(position)) {
+        return false;
+    }
+    
+    String url = buildSetURL();
+    String postData = "position=" + String(position);
+    
+    m_httpClient.begin(m_wifiClient, url);
+    m_httpClient.addHeader("Content-Type", "application/x-www-form-urlencoded");
+    
+    int httpCode = m_httpClient.POST(postData);
+    
+    if (httpCode == HTTP_CODE_OK) {
+        log(Logger::DEBUG, "Position command sent successfully: " + String(position) + "%");
+        m_httpClient.end();
+        return true;
+    } else {
+        handleHttpError(httpCode, "position command");
+        m_httpClient.end();
+        return false;
+    }
+}
+
+float ServoDimmerComponent::calculateLumensFromPosition(int position) const {
+    if (position < 0 || position > 100) {
+        return 0.0f;
+    }
+    
+    return (m_baseLumens * position) / 100.0f;
+}
+
+int ServoDimmerComponent::calculatePositionFromLumens(float lumens) const {
+    if (lumens <= 0.0f) {
+        return 0;
+    }
+    
+    if (lumens >= m_baseLumens) {
+        return 100;
+    }
+    
+    return static_cast<int>((lumens * 100.0f) / m_baseLumens);
+}
+
+bool ServoDimmerComponent::isTimeToCheck() const {
+    return (millis() - m_lastStatusCheck) >= m_checkIntervalMs;
+}
+
+void ServoDimmerComponent::updateMovementSchedule() {
+    if (m_targetPosition != m_currentPosition && m_enableMovement) {
+        // Schedule next execution soon for movement
+        setNextExecutionMs(millis() + 1000); // 1 second
+    } else {
+        // Normal check interval
+        setNextExecutionMs(millis() + m_checkIntervalMs);
+    }
+}
+
+String ServoDimmerComponent::buildStatusURL() const {
+    return "http://" + m_deviceIP + ":" + String(m_devicePort) + "/status";
+}
+
+String ServoDimmerComponent::buildSetURL() const {
+    return "http://" + m_deviceIP + ":" + String(m_devicePort) + "/set";
+}
+
+void ServoDimmerComponent::handleHttpError(int httpCode, const String& operation) {
+    m_communicationErrors++;
+    String errorMsg = "HTTP error during " + operation + ": " + String(httpCode);
+    
+    if (httpCode == HTTPC_ERROR_CONNECTION_REFUSED) {
+        errorMsg += " (Connection refused - device offline?)";
+    } else if (httpCode == HTTPC_ERROR_CONNECTION_LOST) {
+        errorMsg += " (Connection lost)";
+    } else if (httpCode == HTTPC_ERROR_NO_HTTP_SERVER) {
+        errorMsg += " (No HTTP server)";
+    } else if (httpCode == HTTPC_ERROR_READ_TIMEOUT) {
+        errorMsg += " (Timeout)";
+    }
+    
+    log(Logger::ERROR, errorMsg);
+}
+
+bool ServoDimmerComponent::validatePosition(int position) const {
+    return position >= 0 && position <= 100;
+}

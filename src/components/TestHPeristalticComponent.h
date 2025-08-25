@@ -6,10 +6,10 @@
 class Orchestrator;
 
 /**
- * @brief Test harness for peristaltic pump dosing operations
+ * @brief Test harness for multi-pump peristaltic dosing operations
  * 
- * Automated testing component that can trigger dosing operations on 
- * one or two peristaltic pumps at configurable intervals.
+ * Automated testing component that can trigger random dosing operations on 
+ * up to 8 peristaltic pumps with configurable intervals and volumes.
  */
 class TestHPeristalticComponent : public BaseComponent {
 public:
@@ -54,10 +54,28 @@ public:
 
 private:
     // Configuration parameters
-    float m_doseAmtMls = 10.0;        // Amount to dose per cycle (ml)
-    uint32_t m_doseFreqSec = 30;      // Frequency between doses (seconds)
-    String m_dosagePump1ID = "";      // ID of primary pump
-    String m_dosagePump2ID = "";      // ID of secondary pump (optional)
+    float m_minDoseVolume = 5.0;      // Minimum dose volume (ml)
+    float m_maxDoseVolume = 100.0;    // Maximum dose volume (ml)  
+    uint32_t m_doseFreqSec = 20;      // Frequency between doses (seconds)
+    bool m_randomDosing = true;       // Enable random dosing mode
+    
+    // 8-Pump configuration
+    struct PumpConfig {
+        String pumpId;
+        String functionName;
+        bool enabled;
+    };
+    
+    PumpConfig m_pumps[8] = {
+        {"pump-1", "Nutrient-A", true},
+        {"pump-2", "Nutrient-B", true}, 
+        {"pump-3", "pH-Up", true},
+        {"pump-4", "pH-Down", true},
+        {"pump-5", "CalMag", true},
+        {"pump-6", "Bloom", true},
+        {"pump-7", "Root-Boost", true},
+        {"pump-8", "Flush", true}
+    };
     
     // State tracking
     bool m_testRunning = false;
@@ -70,9 +88,12 @@ private:
     
     // Private methods
     bool applyConfiguration(const JsonDocument& config);
-    bool triggerPumpDose(const String& pumpId);
+    bool triggerRandomDose();
+    bool triggerPumpDose(const String& pumpId, float volume);
+    bool isPumpAvailable(const String& pumpId);
     void updateTestState();
     void resetTestStats();
+    float generateRandomVolume();
     
     // Orchestrator reference for component lookup
     Orchestrator* m_orchestrator;

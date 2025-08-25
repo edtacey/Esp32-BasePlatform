@@ -33,6 +33,9 @@ public:
 private:
     static Level s_currentLevel;
     static bool s_initialized;
+    static bool s_fileLoggingEnabled;
+    static uint32_t s_maxLogFileSize;
+    static String s_logFilePath;
 
 public:
     /**
@@ -46,6 +49,13 @@ public:
      * @param level New minimum log level
      */
     static void setLevel(Level level);
+    
+    /**
+     * @brief Enable or disable file logging to LittleFS
+     * @param enabled True to enable file logging
+     * @param maxLogFileSizeKB Maximum log file size in KB (default 100KB)
+     */
+    static void enableFileLogging(bool enabled, uint32_t maxLogFileSizeKB = 100);
 
     /**
      * @brief Log a debug message
@@ -97,6 +107,19 @@ private:
      * @return Level as string
      */
     static const char* levelToString(Level level);
+    
+    /**
+     * @brief Write log entry to file if file logging is enabled
+     * @param level Log level
+     * @param component Component name
+     * @param message Log message
+     */
+    static void writeToFile(Level level, const char* component, const String& message);
+    
+    /**
+     * @brief Rotate log file if it exceeds maximum size
+     */
+    static void rotateLogFileIfNeeded();
 };
 
 #endif // LOGGER_H
