@@ -1,0 +1,13 @@
+{
+  "mcp": {
+    "servers": {
+      "archon": {
+        "command": "npx",
+        "args": ["-y", "@archon-ai/archon-mcp"],
+        "env": {
+          "ARCHON_DATA_PATH": ".archon"
+        }
+      }
+    }
+  }
+}

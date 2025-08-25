@@ -1,0 +1,1 @@
+// ConfigStorage.h placeholder

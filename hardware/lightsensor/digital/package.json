@@ -1,0 +1,31 @@
+{
+  "name": "tsl2561-test-harness",
+  "version": "1.0.0",
+  "description": "TSL2561 Light Sensor Test Harness for ESP32",
+  "main": "src/main.cpp",
+  "scripts": {
+    "build": "pio run",
+    "upload": "pio run --target upload",
+    "monitor": "pio device monitor",
+    "clean": "pio run --target clean",
+    "setup-archon": "npm install -g @archon-ai/archon-mcp"
+  },
+  "keywords": [
+    "esp32",
+    "tsl2561",
+    "light-sensor",
+    "hardware-testing",
+    "i2c"
+  ],
+  "author": "Hardware Test Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@archon-ai/archon-mcp": "latest"
+  },
+  "archon": {
+    "project_type": "embedded-hardware",
+    "platforms": ["esp32"],
+    "sensors": ["tsl2561"],
+    "protocols": ["i2c"]
+  }
+}

@@ -1,0 +1,35 @@
+# PlatformIO
+.pio/
+.vscode/
+.pioenvs
+.piolibdeps
+.clang_complete
+.gcc-flags.json
+
+# Archon data (keep config, ignore runtime data)
+.archon/data/
+.archon/logs/
+.archon/cache/
+
+# IDE files
+*.swp
+*.swo
+*~
+
+# Build artifacts
+*.bin
+*.elf
+*.map
+
+# Node modules (for Archon MCP)
+node_modules/
+package-lock.json
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

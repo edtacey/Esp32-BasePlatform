@@ -1,0 +1,1 @@
+// ComponentRegistry.h placeholder

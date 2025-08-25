@@ -1,0 +1,26 @@
+{
+  "project": {
+    "name": "TSL2561 Light Sensor Test Harness",
+    "description": "Comprehensive hardware validation and testing framework for TSL2561 digital light sensor on ESP32",
+    "version": "1.0.0",
+    "type": "embedded-hardware-testing",
+    "created": "2025-08-19"
+  },
+  "settings": {
+    "task_management": {
+      "auto_create_tasks": true,
+      "priority_system": true,
+      "status_tracking": true
+    },
+    "knowledge_management": {
+      "enable_rag": true,
+      "code_examples": true,
+      "documentation_search": true
+    },
+    "integration": {
+      "platformio": true,
+      "esp32": true,
+      "i2c_sensors": true
+    }
+  }
+}
