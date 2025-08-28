@@ -337,3 +337,13 @@ String ConfigStorage::getComponentSchemaPath(const String& componentType) {
 void ConfigStorage::log(const String& message) {
     Logger::debug("ConfigStorage", message);
 }
+
+// === Execution Loop Configuration ===
+
+bool ConfigStorage::saveExecutionLoopConfig(const JsonDocument& config) {
+    return saveJsonToFile("/system/execution_loop.json", config);
+}
+
+bool ConfigStorage::loadExecutionLoopConfig(JsonDocument& config) {
+    return loadJsonFromFile("/system/execution_loop.json", config);
+}

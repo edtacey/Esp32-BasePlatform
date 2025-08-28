@@ -43,6 +43,9 @@ private:
     uint32_t m_totalExecutions = 0;
     uint32_t m_totalErrors = 0;
     uint32_t m_loopCount = 0;
+    
+    // Execution loop control
+    bool m_executionLoopPaused = false;
 
 public:
     /**
@@ -107,6 +110,15 @@ public:
      * @return Vector of component pointers
      */
     const std::vector<BaseComponent*>& getComponents() const { return m_components; }
+    
+    /**
+     * @brief Execute action on a component by ID (inter-component communication)
+     * @param componentId ID of target component
+     * @param actionName Name of action to execute
+     * @param parameters Action parameters as JSON
+     * @return ActionResult with execution status and data
+     */
+    ActionResult executeComponentAction(const String& componentId, const String& actionName, const JsonDocument& parameters);
 
     /**
      * @brief Get component count
@@ -127,6 +139,39 @@ public:
      * @return true if running
      */
     bool isRunning() const { return m_running; }
+
+    // === Execution Loop Control ===
+
+    /**
+     * @brief Pause execution loop (stops component execution)
+     * @return true if successful
+     */
+    bool pauseExecutionLoop();
+
+    /**
+     * @brief Resume execution loop
+     * @return true if successful
+     */
+    bool resumeExecutionLoop();
+
+    /**
+     * @brief Check if execution loop is paused
+     * @return true if paused
+     */
+    bool isExecutionLoopPaused() const { return m_executionLoopPaused; }
+
+    /**
+     * @brief Get execution loop configuration
+     * @return Execution loop config as JSON
+     */
+    JsonDocument getExecutionLoopConfig() const;
+
+    /**
+     * @brief Update execution loop configuration
+     * @param config New execution loop configuration
+     * @return true if successful
+     */
+    bool updateExecutionLoopConfig(const JsonDocument& config);
 
     /**
      * @brief Get system uptime in milliseconds

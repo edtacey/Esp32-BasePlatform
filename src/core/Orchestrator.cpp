@@ -12,6 +12,8 @@
 #include "../components/WebServerComponent.h"
 #include "../components/ServoDimmerComponent.h"
 #include "../components/LightOrchestrator.h"
+#include "../components/PHSensorComponent.h"
+#include "../components/ECProbeComponent.h"
 
 Orchestrator::Orchestrator() {
     log(Logger::DEBUG, "Orchestrator created");
@@ -40,6 +42,15 @@ bool Orchestrator::init() {
     // Load system configuration
     loadSystemConfig();
     
+    // Load execution loop configuration
+    JsonDocument execConfig;
+    if (m_storage.loadExecutionLoopConfig(execConfig)) {
+        log(Logger::INFO, "Loading saved execution loop configuration");
+        updateExecutionLoopConfig(execConfig);
+    } else {
+        log(Logger::INFO, "No saved execution loop config found, using defaults");
+    }
+    
     // Initialize default components
     if (!initializeDefaultComponents()) {
         log(Logger::ERROR, "Failed to initialize default components");
@@ -62,8 +73,10 @@ void Orchestrator::loop() {
     
     m_loopCount++;
     
-    // Execute component loop
-    executeComponentLoop();
+    // Execute component loop (unless paused)
+    if (!m_executionLoopPaused) {
+        executeComponentLoop();
+    }
     
     // Perform system checks periodically
     uint32_t now = millis();
@@ -454,6 +467,71 @@ bool Orchestrator::initializeDefaultComponents() {
         }
     }
     
+    // Initialize pH Sensor Component (Mock Mode - GPIO 0)
+    log(Logger::INFO, "Creating pH sensor component in mock mode...");
+    PHSensorComponent* phSensor = new PHSensorComponent("ph-sensor-1", "pH Sensor (Mock)", m_storage, this);
+    
+    // Configure for mock mode (GPIO pin 0)
+    JsonDocument phConfig;
+    phConfig["gpio_pin"] = 0;  // Mock mode
+    phConfig["temp_coefficient"] = 0.05992;
+    phConfig["sample_size"] = 10;
+    phConfig["adc_voltage_ref"] = 3.3;
+    phConfig["adc_resolution"] = 4096;
+    phConfig["reading_interval_ms"] = 500;
+    phConfig["time_period_for_sampling"] = 10000;
+    phConfig["outlier_threshold"] = 2.0;
+    phConfig["temperature_source_id"] = "dht22-1";
+    phConfig["excite_voltage_component_id"] = "";
+    phConfig["excite_stabilize_ms"] = 500;
+    
+    if (!phSensor->initialize(phConfig)) {
+        log(Logger::ERROR, "Failed to initialize pH sensor component");
+        delete phSensor;
+        allSuccess = false;
+    } else {
+        if (!registerComponent(phSensor)) {
+            log(Logger::ERROR, "Failed to register pH sensor component");
+            delete phSensor;
+            allSuccess = false;
+        } else {
+            log(Logger::INFO, "Successfully registered pH sensor in mock mode");
+        }
+    }
+    
+    // Initialize EC Probe Component (Mock Mode - GPIO 0) 
+    log(Logger::INFO, "Creating EC probe component in mock mode...");
+    ECProbeComponent* ecProbe = new ECProbeComponent("ec-probe-1", "EC Probe (Mock)", m_storage, this);
+    
+    // Configure for mock mode (GPIO pin 0)
+    JsonDocument ecConfig;
+    ecConfig["gpio_pin"] = 0;  // Mock mode
+    ecConfig["temp_coefficient"] = 2.0;
+    ecConfig["sample_size"] = 15;
+    ecConfig["adc_voltage_ref"] = 3.3;
+    ecConfig["adc_resolution"] = 4096;
+    ecConfig["reading_interval_ms"] = 800;
+    ecConfig["time_period_for_sampling"] = 15000;
+    ecConfig["outlier_threshold"] = 2.5;
+    ecConfig["tds_conversion_factor"] = 0.64;
+    ecConfig["temperature_source_id"] = "dht22-1";
+    ecConfig["excite_voltage_component_id"] = "";
+    ecConfig["excite_stabilize_ms"] = 1000;
+    
+    if (!ecProbe->initialize(ecConfig)) {
+        log(Logger::ERROR, "Failed to initialize EC probe component");
+        delete ecProbe;
+        allSuccess = false;
+    } else {
+        if (!registerComponent(ecProbe)) {
+            log(Logger::ERROR, "Failed to register EC probe component");
+            delete ecProbe;
+            allSuccess = false;
+        } else {
+            log(Logger::INFO, "Successfully registered EC probe in mock mode");
+        }
+    }
+    
     if (allSuccess) {
         log(Logger::INFO, String("Default components initialized successfully (") + 
                           m_components.size() + " total)");
@@ -584,6 +662,126 @@ bool Orchestrator::checkSystemResources() {
         log(Logger::WARNING, "Heap fragmentation detected");
         return false;
     }
+    
+    return true;
+}
+
+ActionResult Orchestrator::executeComponentAction(const String& componentId, const String& actionName, const JsonDocument& parameters) {
+    ActionResult result;
+    result.actionName = actionName;
+    result.success = false;
+    
+    log(Logger::INFO, String("Inter-component action request: ") + componentId + "/" + actionName);
+    
+    // Find the target component
+    BaseComponent* targetComponent = findComponent(componentId);
+    if (!targetComponent) {
+        result.message = "Component not found: " + componentId;
+        log(Logger::ERROR, result.message);
+        return result;
+    }
+    
+    // Check if component is in a valid state for action execution
+    if (targetComponent->getState() == ComponentState::ERROR) {
+        result.message = "Cannot execute action on component in ERROR state: " + componentId;
+        log(Logger::WARNING, result.message);
+        return result;
+    }
+    
+    if (targetComponent->getState() == ComponentState::COMPONENT_DISABLED) {
+        result.message = "Cannot execute action on disabled component: " + componentId;
+        log(Logger::WARNING, result.message);
+        return result;
+    }
+    
+    // Execute the action using the component's action system
+    try {
+        result = targetComponent->executeAction(actionName, parameters);
+        
+        if (result.success) {
+            log(Logger::INFO, String("Inter-component action completed: ") + componentId + "/" + actionName + 
+                             " (" + result.executionTimeMs + "ms)");
+        } else {
+            log(Logger::WARNING, String("Inter-component action failed: ") + componentId + "/" + actionName + 
+                                " - " + result.message);
+        }
+        
+    } catch (...) {
+        result.success = false;
+        result.message = "Exception during inter-component action execution";
+        log(Logger::ERROR, result.message);
+    }
+    
+    return result;
+}
+
+// === Execution Loop Control ===
+
+bool Orchestrator::pauseExecutionLoop() {
+    if (!m_initialized) {
+        return false;
+    }
+    
+    m_executionLoopPaused = true;
+    log(Logger::INFO, "Execution loop paused");
+    return true;
+}
+
+bool Orchestrator::resumeExecutionLoop() {
+    if (!m_initialized) {
+        return false;
+    }
+    
+    m_executionLoopPaused = false;
+    log(Logger::INFO, "Execution loop resumed");
+    return true;
+}
+
+JsonDocument Orchestrator::getExecutionLoopConfig() const {
+    JsonDocument config;
+    
+    config["paused"] = m_executionLoopPaused;
+    config["system_check_interval_ms"] = m_systemCheckInterval;
+    config["max_components"] = m_maxComponents;
+    config["total_executions"] = m_totalExecutions;
+    config["total_errors"] = m_totalErrors;
+    config["loop_count"] = m_loopCount;
+    config["uptime_ms"] = getUptime();
+    
+    return config;
+}
+
+bool Orchestrator::updateExecutionLoopConfig(const JsonDocument& config) {
+    if (!m_initialized) {
+        return false;
+    }
+    
+    // Update system check interval if provided
+    if (config["system_check_interval_ms"].is<uint32_t>()) {
+        uint32_t newInterval = config["system_check_interval_ms"];
+        if (newInterval >= 1000 && newInterval <= 300000) { // 1s to 5min range
+            m_systemCheckInterval = newInterval;
+            log(Logger::INFO, String("Updated system check interval to ") + newInterval + "ms");
+        } else {
+            log(Logger::WARNING, "Invalid system check interval: " + String(newInterval));
+            return false;
+        }
+    }
+    
+    // Update pause state if provided
+    if (config["paused"].is<bool>()) {
+        bool shouldPause = config["paused"];
+        if (shouldPause != m_executionLoopPaused) {
+            if (shouldPause) {
+                pauseExecutionLoop();
+            } else {
+                resumeExecutionLoop();
+            }
+        }
+    }
+    
+    // Save config to persistent storage
+    m_storage.saveExecutionLoopConfig(getExecutionLoopConfig());
     
     return true;
 }

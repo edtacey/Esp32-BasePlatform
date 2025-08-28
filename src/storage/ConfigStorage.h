@@ -145,6 +145,22 @@ public:
      */
     bool formatStorage();
 
+    // === Execution Loop Configuration ===
+
+    /**
+     * @brief Save execution loop configuration
+     * @param config Execution loop configuration document
+     * @return true if saved successfully
+     */
+    bool saveExecutionLoopConfig(const JsonDocument& config);
+
+    /**
+     * @brief Load execution loop configuration
+     * @param config Output configuration document
+     * @return true if loaded successfully
+     */
+    bool loadExecutionLoopConfig(JsonDocument& config);
+
 private:
     /**
      * @brief Save JSON document to file

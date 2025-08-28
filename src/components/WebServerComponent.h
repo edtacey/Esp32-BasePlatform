@@ -35,6 +35,22 @@ public:
     ExecutionResult execute() override;
     void cleanup() override;
 
+protected:
+    // === Configuration Management (BaseComponent virtual methods) ===
+    
+    /**
+     * @brief Get current component configuration as JSON
+     * @return JsonDocument containing all current settings
+     */
+    JsonDocument getCurrentConfig() const override;
+    
+    /**
+     * @brief Apply configuration to component variables
+     * @param config Configuration to apply (may be empty for defaults)
+     * @return true if configuration applied successfully
+     */
+    bool applyConfig(const JsonDocument& config) override;
+
 private:
     // Configuration parameters
     uint16_t m_serverPort = 80;              // HTTP server port
@@ -63,6 +79,21 @@ private:
     void handleLogFile(AsyncWebServerRequest* request);
     void handleMemoryInfo(AsyncWebServerRequest* request);
     void handleComponentsMqtt(AsyncWebServerRequest* request);
+    void handleComponentsDebug(AsyncWebServerRequest* request);
+    void handleSweepTestStart(AsyncWebServerRequest* request);
+    void handleSweepTestStop(AsyncWebServerRequest* request);
+    void handleSweepTestStatus(AsyncWebServerRequest* request);
+    void handleComponentConfig(AsyncWebServerRequest* request);
+    void handleComponentConfigGet(AsyncWebServerRequest* request);
+    void handleComponentActionsGet(AsyncWebServerRequest* request);
+    void handleComponentActionExecute(AsyncWebServerRequest* request);
+    
+    // Execution loop control handlers
+    void handleExecutionLoopStatus(AsyncWebServerRequest* request);
+    void handleExecutionLoopPause(AsyncWebServerRequest* request);
+    void handleExecutionLoopResume(AsyncWebServerRequest* request);
+    void handleExecutionLoopConfig(AsyncWebServerRequest* request);
+    void handleExecutionLoopConfigUpdate(AsyncWebServerRequest* request);
     
     // Web page handlers  
     void handleHomePage(AsyncWebServerRequest* request);
@@ -75,4 +106,8 @@ private:
     void setCORSHeaders(AsyncWebServerResponse* response);
     void logRequest(AsyncWebServerRequest* request);
     JsonDocument getAllComponentData();
+
+    // === Action System (BaseComponent virtual methods) ===
+    std::vector<ComponentAction> getSupportedActions() const override;
+    ActionResult performAction(const String& actionName, const JsonDocument& parameters) override;
 };
