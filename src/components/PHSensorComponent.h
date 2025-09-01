@@ -82,6 +82,9 @@ protected:
      * @return Action execution result
      */
     ActionResult performAction(const String& actionName, const JsonDocument& parameters) override;
+    
+    // === Data Filtering (BaseComponent virtual methods) ===
+    JsonDocument getCoreData() const override;
 
 public:
     // pH sensor specific methods

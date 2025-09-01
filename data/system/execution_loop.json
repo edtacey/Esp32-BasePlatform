@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "interval_ms": 1000,
+  "max_components_per_cycle": 5,
+  "component_timeout_ms": 30000,
+  "statistics_enabled": true
+}

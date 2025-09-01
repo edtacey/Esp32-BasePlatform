@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard - ESP32 IoT</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="/www/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>📊 Component Dashboard</h1>
+        <div class="nav">
+            <a href="/">Home</a>
+            <a href="/www/dashboard.html" class="active">Dashboard</a>
+            <a href="/api/components">API</a>
+        </div>
+        
+        <div class="dashboard-controls">
+            <div class="view-toggle">
+                <label class="toggle-label">
+                    <input type="radio" name="dataMode" value="core" checked> Core Data
+                </label>
+                <label class="toggle-label">
+                    <input type="radio" name="dataMode" value="full"> Full Data
+                </label>
+                <label class="toggle-label">
+                    <input type="radio" name="dataMode" value="diagnostics"> Diagnostics
+                </label>
+            </div>
+            <div class="refresh-controls">
+                <button id="refreshBtn" class="btn">🔄 Refresh</button>
+                <label class="auto-refresh-label">
+                    <input type="checkbox" id="autoRefresh" checked> Auto-refresh (30s)
+                </label>
+            </div>
+        </div>
+        
+        <div id="components" class="components-grid">
+            <div class="loading">Loading components...</div>
+        </div>
+    </div>
+    <script src="/www/app.js"></script>
+</body>
+</html>

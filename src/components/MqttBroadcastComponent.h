@@ -35,6 +35,22 @@ public:
     ExecutionResult execute() override;
     void cleanup() override;
 
+protected:
+    // === Configuration Management (BaseComponent virtual methods) ===
+    
+    /**
+     * @brief Get current component configuration as JSON
+     * @return JsonDocument containing all current settings
+     */
+    JsonDocument getCurrentConfig() const override;
+    
+    /**
+     * @brief Apply configuration to component variables
+     * @param config Configuration to apply (may be empty for defaults)
+     * @return true if configuration applied successfully
+     */
+    bool applyConfig(const JsonDocument& config) override;
+
 private:
     // Configuration parameters
     String m_mqttServer = "192.168.1.80";    // MQTT server IP/hostname
@@ -63,4 +79,8 @@ private:
     void publishSingleComponent(BaseComponent* component);
     String getComponentTopic(const String& componentId) const;
     bool ensureMqttConnection();
+
+    // === Action System (BaseComponent virtual methods) ===
+    std::vector<ComponentAction> getSupportedActions() const override;
+    ActionResult performAction(const String& actionName, const JsonDocument& parameters) override;
 };

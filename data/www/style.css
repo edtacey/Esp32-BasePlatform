@@ -1,0 +1,206 @@
+/* ESP32 IoT Orchestrator Styles */
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background: #f5f5f5;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+h1 {
+    color: #333;
+    border-bottom: 2px solid #007acc;
+    padding-bottom: 10px;
+}
+
+.nav {
+    margin: 20px 0;
+}
+
+.nav a {
+    display: inline-block;
+    margin-right: 15px;
+    padding: 8px 16px;
+    background: #007acc;
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+}
+
+.nav a:hover, .nav a.active {
+    background: #005a8c;
+}
+
+.dashboard-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 20px 0;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+}
+
+.view-toggle {
+    display: flex;
+    gap: 15px;
+}
+
+.toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.toggle-label input[type="radio"] {
+    margin: 0;
+}
+
+.refresh-controls {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.btn {
+    padding: 8px 16px;
+    background: #007acc;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.btn:hover {
+    background: #005a8c;
+}
+
+.auto-refresh-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+}
+
+.status {
+    background: #e7f5e7;
+    padding: 15px;
+    border-radius: 5px;
+    margin: 15px 0;
+}
+
+.components-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 15px;
+    margin-top: 20px;
+}
+
+.component-card {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 15px;
+}
+
+.component-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.component-data {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.data-item {
+    background: #e9ecef;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+.data-item.sensor {
+    background: #d1ecf1;
+    border: 1px solid #bee5eb;
+}
+
+.loading {
+    text-align: center;
+    padding: 40px;
+    color: #666;
+}
+
+.error {
+    background: #f8d7da;
+    color: #721c24;
+    padding: 10px;
+    border-radius: 4px;
+    margin: 10px 0;
+}
+
+.no-data {
+    color: #6c757d;
+    font-style: italic;
+    padding: 10px;
+    text-align: center;
+}
+
+.execution-count {
+    margin-top: 10px;
+    font-size: 0.8em;
+    color: #6c757d;
+    text-align: right;
+}
+
+.diagnostic-info {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #dee2e6;
+}
+
+.diag-item {
+    font-size: 0.8em;
+    color: #495057;
+    margin: 2px 0;
+}
+
+.diag-item.error {
+    color: #dc3545;
+    font-weight: bold;
+}
+
+/* Component state styling */
+.state-ready {
+    border-left: 4px solid #28a745;
+}
+
+.state-executing {
+    border-left: 4px solid #007bff;
+}
+
+.state-error {
+    border-left: 4px solid #dc3545;
+}
+
+.state-initializing {
+    border-left: 4px solid #ffc107;
+}
+
+.state-unknown {
+    border-left: 4px solid #6c757d;
+}

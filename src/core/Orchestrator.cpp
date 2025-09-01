@@ -7,13 +7,13 @@
 #include "../components/DHT22Component.h"
 #include "../components/TSL2561Component.h"
 #include "../components/PeristalticPumpComponent.h"
-#include "../components/TestHPeristalticComponent.h"
-#include "../components/MqttBroadcastComponent.h"
 #include "../components/WebServerComponent.h"
-#include "../components/ServoDimmerComponent.h"
-#include "../components/LightOrchestrator.h"
 #include "../components/PHSensorComponent.h"
 #include "../components/ECProbeComponent.h"
+// #include "../components/TestHPeristalticComponent.h"  // Disabled to save memory
+// #include "../components/MqttBroadcastComponent.h"      // Disabled to save memory
+// #include "../components/ServoDimmerComponent.h"         // Disabled to save memory
+// #include "../components/LightOrchestrator.h"            // Disabled to save memory
 
 Orchestrator::Orchestrator() {
     log(Logger::DEBUG, "Orchestrator created");
@@ -51,9 +51,9 @@ bool Orchestrator::init() {
         log(Logger::INFO, "No saved execution loop config found, using defaults");
     }
     
-    // Initialize default components
-    if (!initializeDefaultComponents()) {
-        log(Logger::ERROR, "Failed to initialize default components");
+    // Initialize components from persistent storage or defaults
+    if (!initializeComponents()) {
+        log(Logger::ERROR, "Failed to initialize components");
         return false;
     }
     
@@ -306,6 +306,103 @@ bool Orchestrator::saveSystemConfig() {
 
 // Private methods
 
+bool Orchestrator::initializeComponents() {
+    log(Logger::INFO, "Initializing components from storage or defaults...");
+    
+    // Get list of all stored component configurations
+    std::vector<String> storedComponents = m_storage.listComponentConfigs();
+    
+    log(Logger::INFO, String("Found ") + storedComponents.size() + " stored component configurations");
+    
+    if (storedComponents.size() == 0) {
+        // No stored components, initialize with defaults
+        log(Logger::INFO, "No stored components found, initializing defaults...");
+        return initializeDefaultComponents();
+    }
+    
+    // Load each stored component
+    bool allSuccess = true;
+    int loadedCount = 0;
+    
+    for (const String& componentId : storedComponents) {
+        JsonDocument config;
+        if (m_storage.loadComponentConfig(componentId, config)) {
+            
+            // Extract component type from stored config
+            String componentType = config["component_type"];
+            if (componentType.isEmpty()) {
+                log(Logger::WARNING, "Stored config for " + componentId + " missing component_type, skipping");
+                continue;
+            }
+            
+            // Create component instance based on type
+            BaseComponent* component = createComponentByType(componentId, componentType);
+            if (!component) {
+                log(Logger::ERROR, "Failed to create component " + componentId + " of type " + componentType);
+                allSuccess = false;
+                continue;
+            }
+            
+            // Initialize component with stored config
+            if (component->initialize(config)) {
+                if (registerComponent(component)) {
+                    loadedCount++;
+                    log(Logger::INFO, "Loaded component: " + componentId + " (" + componentType + ")");
+                } else {
+                    log(Logger::ERROR, "Failed to register component: " + componentId);
+                    delete component;
+                    allSuccess = false;
+                }
+            } else {
+                log(Logger::ERROR, "Failed to initialize component: " + componentId);
+                delete component;
+                allSuccess = false;
+            }
+            
+        } else {
+            log(Logger::ERROR, "Failed to load config for component: " + componentId);
+            allSuccess = false;
+        }
+    }
+    
+    log(Logger::INFO, String("Loaded ") + loadedCount + " components from storage");
+    
+    // If no components were loaded successfully, fall back to defaults
+    if (loadedCount == 0) {
+        log(Logger::WARNING, "No components loaded from storage, falling back to defaults");
+        return initializeDefaultComponents();
+    }
+    
+    return allSuccess;
+}
+
+BaseComponent* Orchestrator::createComponentByType(const String& componentId, const String& componentType) {
+    String componentName = componentId; // Default name, can be overridden by config
+    
+    if (componentType == "DHT22" || componentType == "TemperatureSensor") {
+        return new DHT22Component(componentId, componentName, m_storage, this);
+    }
+    else if (componentType == "TSL2561" || componentType == "LightSensor") {
+        return new TSL2561Component(componentId, componentName, m_storage, this);
+    }
+    else if (componentType == "PeristalticPump" || componentType == "Pump") {
+        return new PeristalticPumpComponent(componentId, componentName, m_storage, this);
+    }
+    else if (componentType == "WebServer") {
+        return new WebServerComponent(componentId, componentName, m_storage, this);
+    }
+    else if (componentType == "PHSensor") {
+        return new PHSensorComponent(componentId, componentName, m_storage, this);
+    }
+    else if (componentType == "ECProbe") {
+        return new ECProbeComponent(componentId, componentName, m_storage, this);
+    }
+    else {
+        log(Logger::ERROR, "Unknown component type: " + componentType);
+        return nullptr;
+    }
+}
+
 bool Orchestrator::initializeDefaultComponents() {
     log(Logger::INFO, "Initializing default components...");
     
@@ -327,18 +424,30 @@ bool Orchestrator::initializeDefaultComponents() {
         }
     }
     
-    // Initialize TSL2561 light sensor with default configuration
-    log(Logger::INFO, "Creating TSL2561 light sensor...");
-    TSL2561Component* tsl = new TSL2561Component("tsl2561-1", "Ambient Light Sensor", m_storage, this);
+    // Local TSL2561 light sensor disabled to save flash memory
+    // log(Logger::INFO, "Creating local TSL2561 light sensor...");
+    // TSL2561Component* tslLocal = new TSL2561Component("tsl2561-local", "Local Light Sensor", m_storage, this);
     
-    if (!tsl->initialize(JsonDocument())) {  // Use default configuration
-        log(Logger::ERROR, "Failed to initialize TSL2561 component");
-        delete tsl;
+    // Initialize remote TSL2561 light sensor with HTTP
+    log(Logger::INFO, "Creating remote TSL2561 light sensor...");
+    TSL2561Component* tslRemote = new TSL2561Component("tsl2561-remote", "Remote Light Sensor", m_storage, this);
+    
+    JsonDocument remoteConfig;
+    remoteConfig["useRemoteSensor"] = true;
+    remoteConfig["remoteHost"] = "192.168.1.156";
+    remoteConfig["remotePort"] = 80;
+    remoteConfig["remotePath"] = "/light";
+    remoteConfig["httpTimeoutMs"] = 5000;
+    remoteConfig["samplingIntervalMs"] = 3000;  // Different interval
+    
+    if (!tslRemote->initialize(remoteConfig)) {
+        log(Logger::ERROR, "Failed to initialize remote TSL2561 component");
+        delete tslRemote;
         allSuccess = false;
     } else {
-        if (!registerComponent(tsl)) {
-            log(Logger::ERROR, "Failed to register TSL2561 component");
-            delete tsl;
+        if (!registerComponent(tslRemote)) {
+            log(Logger::ERROR, "Failed to register remote TSL2561 component");
+            delete tslRemote;
             allSuccess = false;
         }
     }
@@ -351,18 +460,11 @@ bool Orchestrator::initializeDefaultComponents() {
         uint8_t pin;
     };
     
-    PumpConfig pumpConfigs[8] = {
-        {"pump-1", "Nutrient-A", "Base nutrients", 26},
-        {"pump-2", "Nutrient-B", "Micro nutrients", 27}, 
-        {"pump-3", "pH-Up", "pH adjustment alkaline", 14},
-        {"pump-4", "pH-Down", "pH adjustment acidic", 12},
-        {"pump-5", "CalMag", "Calcium/Magnesium supplement", 13},
-        {"pump-6", "Bloom", "Flowering nutrients", 25},
-        {"pump-7", "Root-Boost", "Root stimulator", 33},
-        {"pump-8", "Flush", "System flush solution", 32}
+    PumpConfig pumpConfigs[1] = {
+        {"pump-1", "Nutrient-A", "Base nutrients", 26}
     };
     
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 1; i++) {  // Single pump for debugging
         log(Logger::INFO, String("Creating pump ") + (i+1) + ": " + pumpConfigs[i].name + " (" + pumpConfigs[i].function + ")");
         PeristalticPumpComponent* pump = new PeristalticPumpComponent(pumpConfigs[i].id, pumpConfigs[i].name, m_storage, this);
         
@@ -387,37 +489,25 @@ bool Orchestrator::initializeDefaultComponents() {
         }
     }
     
-    // Initialize Test Harness for pump testing
-    log(Logger::INFO, "Creating pump test harness...");
-    TestHPeristalticComponent* testHarness = new TestHPeristalticComponent("test-harness-1", "Pump Test Harness", m_storage, this);
+    // Initialize Test Harness for pump testing - TEMPORARILY DISABLED TO SAVE FLASH MEMORY
+    // log(Logger::INFO, "Creating pump test harness...");
+    // TestHPeristalticComponent* testHarness = new TestHPeristalticComponent("test-harness-1", "Pump Test Harness", m_storage, this);
+    // 
+    // if (!testHarness->initialize(JsonDocument())) {  // Use default configuration
+    //     log(Logger::ERROR, "Failed to initialize test harness component");
+    //     delete testHarness;
+    //     allSuccess = false;
+    // } else {
+    //     if (!registerComponent(testHarness)) {
+    //         log(Logger::ERROR, "Failed to register test harness component");
+    //         delete testHarness;
+    //         allSuccess = false;
+    //     }
+    // }
     
-    if (!testHarness->initialize(JsonDocument())) {  // Use default configuration
-        log(Logger::ERROR, "Failed to initialize test harness component");
-        delete testHarness;
-        allSuccess = false;
-    } else {
-        if (!registerComponent(testHarness)) {
-            log(Logger::ERROR, "Failed to register test harness component");
-            delete testHarness;
-            allSuccess = false;
-        }
-    }
-    
-    // Initialize MQTT Broadcast Component
-    log(Logger::INFO, "Creating MQTT broadcast component...");
-    MqttBroadcastComponent* mqttBroadcast = new MqttBroadcastComponent("mqtt-broadcast-1", "MQTT Component Broadcaster", m_storage, this);
-    
-    if (!mqttBroadcast->initialize(JsonDocument())) {  // Use default configuration
-        log(Logger::ERROR, "Failed to initialize MQTT broadcast component");
-        delete mqttBroadcast;
-        allSuccess = false;
-    } else {
-        if (!registerComponent(mqttBroadcast)) {
-            log(Logger::ERROR, "Failed to register MQTT broadcast component");
-            delete mqttBroadcast;
-            allSuccess = false;
-        }
-    }
+    // MQTT Broadcast Component disabled to save flash memory
+    // log(Logger::INFO, "Creating MQTT broadcast component...");
+    // MqttBroadcastComponent* mqttBroadcast = new MqttBroadcastComponent("mqtt-broadcast-1", "MQTT Component Broadcaster", m_storage, this);
     
     // Initialize Web Server Component (after WiFi is connected)
     log(Logger::INFO, "Creating web server component...");
@@ -435,37 +525,37 @@ bool Orchestrator::initializeDefaultComponents() {
         }
     }
     
-    // Initialize Servo Dimmer Component
-    log(Logger::INFO, "Creating servo dimmer component...");
-    ServoDimmerComponent* servoDimmer = new ServoDimmerComponent("servo-dimmer-1", "Lighting Servo Dimmer", m_storage, this);
+    // Initialize Servo Dimmer Component - TEMPORARILY DISABLED TO SAVE FLASH MEMORY
+    // log(Logger::INFO, "Creating servo dimmer component...");
+    // ServoDimmerComponent* servoDimmer = new ServoDimmerComponent("servo-dimmer-1", "Lighting Servo Dimmer", m_storage, this);
+    // 
+    // if (!servoDimmer->initialize(JsonDocument())) {  // Use default configuration
+    //     log(Logger::ERROR, "Failed to initialize servo dimmer component");
+    //     delete servoDimmer;
+    //     allSuccess = false;
+    // } else {
+    //     if (!registerComponent(servoDimmer)) {
+    //         log(Logger::ERROR, "Failed to register servo dimmer component");
+    //         delete servoDimmer;
+    //         allSuccess = false;
+    //     }
+    // }
     
-    if (!servoDimmer->initialize(JsonDocument())) {  // Use default configuration
-        log(Logger::ERROR, "Failed to initialize servo dimmer component");
-        delete servoDimmer;
-        allSuccess = false;
-    } else {
-        if (!registerComponent(servoDimmer)) {
-            log(Logger::ERROR, "Failed to register servo dimmer component");
-            delete servoDimmer;
-            allSuccess = false;
-        }
-    }
-    
-    // Initialize Light Orchestrator Component (after servo dimmer and sensors)
-    log(Logger::INFO, "Creating light orchestrator component...");
-    LightOrchestrator* lightOrchestrator = new LightOrchestrator("light-orchestrator-1", "Intelligent Lighting Controller", m_storage, this);
-    
-    if (!lightOrchestrator->initialize(JsonDocument())) {  // Use default configuration
-        log(Logger::ERROR, "Failed to initialize light orchestrator component");
-        delete lightOrchestrator;
-        allSuccess = false;
-    } else {
-        if (!registerComponent(lightOrchestrator)) {
-            log(Logger::ERROR, "Failed to register light orchestrator component");
-            delete lightOrchestrator;
-            allSuccess = false;
-        }
-    }
+    // Initialize Light Orchestrator Component - TEMPORARILY DISABLED TO SAVE FLASH MEMORY
+    // log(Logger::INFO, "Creating light orchestrator component...");
+    // LightOrchestrator* lightOrchestrator = new LightOrchestrator("light-orchestrator-1", "Intelligent Lighting Controller", m_storage, this);
+    // 
+    // if (!lightOrchestrator->initialize(JsonDocument())) {  // Use default configuration
+    //     log(Logger::ERROR, "Failed to initialize light orchestrator component");
+    //     delete lightOrchestrator;
+    //     allSuccess = false;
+    // } else {
+    //     if (!registerComponent(lightOrchestrator)) {
+    //         log(Logger::ERROR, "Failed to register light orchestrator component");
+    //         delete lightOrchestrator;
+    //         allSuccess = false;
+    //     }
+    // }
     
     // Initialize pH Sensor Component (Mock Mode - GPIO 0)
     log(Logger::INFO, "Creating pH sensor component in mock mode...");
@@ -536,10 +626,18 @@ bool Orchestrator::initializeDefaultComponents() {
         log(Logger::INFO, String("Default components initialized successfully (") + 
                           m_components.size() + " total)");
     } else {
-        log(Logger::WARNING, "Some default components failed to initialize");
+        log(Logger::WARNING, String("Some default components failed to initialize, continuing with ") + 
+                            m_components.size() + " successful components");
     }
     
-    return allSuccess;
+    // Always return true if at least one component succeeded
+    bool hasComponents = m_components.size() > 0;
+    if (!hasComponents) {
+        log(Logger::ERROR, "No components successfully initialized!");
+        return false;
+    }
+    
+    return true;  // Continue even if some components failed
 }
 
 void Orchestrator::executeComponentLoop() {
@@ -547,6 +645,18 @@ void Orchestrator::executeComponentLoop() {
     
     if (executedCount > 0) {
         log(Logger::DEBUG, String("Executed ") + executedCount + " components");
+    } else {
+        // Force execute first component if nothing is executing  
+        static int noExecCount = 0;
+        noExecCount++;
+        if (noExecCount > 100 && m_components.size() > 0) { // After 100 loops with no execution
+            log(Logger::WARNING, "No components executing - forcing first component");
+            if (m_components[0] && m_components[0]->getState() == ComponentState::READY) {
+                ExecutionResult result = m_components[0]->execute();
+                handleExecutionResult(m_components[0], result);
+                noExecCount = 0;
+            }
+        }
     }
 }
 
@@ -641,6 +751,41 @@ void Orchestrator::log(Logger::Level level, const String& message) {
             Logger::critical("Orchestrator", message);
             break;
     }
+}
+
+JsonDocument Orchestrator::fetchRemoteData(const String& url, uint32_t timeoutMs) {
+    JsonDocument result;
+    
+    // Use HttpClientWrapper for smart retry/backoff
+    HttpResult httpResult = m_httpWrapper.get(url, timeoutMs);
+    
+    log(Logger::DEBUG, "Smart HTTP request to: " + url);
+    
+    if (httpResult.success) {
+        log(Logger::DEBUG, "Remote data response: " + httpResult.response);
+        
+        DeserializationError error = deserializeJson(result, httpResult.response);
+        if (error) {
+            log(Logger::ERROR, String("Failed to parse remote JSON: ") + error.c_str());
+            result.clear();
+            result["error"] = "JSON parse failed";
+        } else {
+            result["success"] = true;
+        }
+    } else {
+        log(Logger::ERROR, String("Smart HTTP request failed: ") + httpResult.error);
+        result["error"] = httpResult.error;
+        result["httpCode"] = httpResult.httpCode;
+        result["shouldDefer"] = httpResult.shouldDefer;
+        result["nextRetryMs"] = httpResult.nextRetryMs;
+        
+        // If we should defer, calculate retry delay in seconds for easier consumption
+        if (httpResult.shouldDefer && httpResult.nextRetryMs > millis()) {
+            result["retryInSeconds"] = (httpResult.nextRetryMs - millis()) / 1000;
+        }
+    }
+    
+    return result;
 }
 
 void Orchestrator::updateStatistics() {

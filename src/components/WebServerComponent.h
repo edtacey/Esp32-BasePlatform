@@ -85,6 +85,10 @@ private:
     void handleSweepTestStatus(AsyncWebServerRequest* request);
     void handleComponentConfig(AsyncWebServerRequest* request);
     void handleComponentConfigGet(AsyncWebServerRequest* request);
+    void handleGenericComponentConfigUpdate(AsyncWebServerRequest* request);
+    void handleGenericComponentConfigGet(AsyncWebServerRequest* request);
+    void handleComponentAdd(AsyncWebServerRequest* request);
+    void handleComponentDelete(AsyncWebServerRequest* request);
     void handleComponentActionsGet(AsyncWebServerRequest* request);
     void handleComponentActionExecute(AsyncWebServerRequest* request);
     
@@ -101,11 +105,20 @@ private:
     void handleLogsPage(AsyncWebServerRequest* request);
     void handleDashboardPage(AsyncWebServerRequest* request);
     
+    // Data filtering options
+    enum DataFilterType {
+        FILTER_NONE,         // All data (default)
+        FILTER_CORE,         // Core sensor values only
+        FILTER_DIAGNOSTICS   // Full diagnostic data
+    };
+    
     // Utility methods
     String getContentType(const String& filename);
     void setCORSHeaders(AsyncWebServerResponse* response);
     void logRequest(AsyncWebServerRequest* request);
     JsonDocument getAllComponentData();
+    JsonDocument filterComponentData(const JsonDocument& data, DataFilterType filterType);
+    bool serveStaticFile(AsyncWebServerRequest* request, const String& path);
 
     // === Action System (BaseComponent virtual methods) ===
     std::vector<ComponentAction> getSupportedActions() const override;

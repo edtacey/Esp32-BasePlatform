@@ -82,6 +82,30 @@ public:
      */
     void cleanup() override;
 
+protected:
+    // === Configuration Management (BaseComponent virtual methods) ===
+    
+    /**
+     * @brief Get current component configuration as JSON
+     * @return JsonDocument containing all current settings
+     */
+    JsonDocument getCurrentConfig() const override;
+    
+    /**
+     * @brief Apply configuration to component variables
+     * @param config Configuration to apply (may be empty for defaults)
+     * @return true if configuration applied successfully
+     */
+    bool applyConfig(const JsonDocument& config) override;
+
+    // === Action System (BaseComponent virtual methods) ===
+    std::vector<ComponentAction> getSupportedActions() const override;
+    ActionResult performAction(const String& actionName, const JsonDocument& parameters) override;
+    
+    // === Data Filtering (BaseComponent virtual methods) ===
+    JsonDocument getCoreData() const override;
+
+public:
     // === DHT22 Specific Methods ===
     
     /**

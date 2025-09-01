@@ -42,6 +42,54 @@ struct ExecutionResult {
 };
 
 /**
+ * @brief Action parameter types for validation
+ */
+enum class ActionParameterType {
+    INTEGER,
+    FLOAT,
+    STRING, 
+    BOOLEAN,
+    ARRAY,
+    OBJECT
+};
+
+/**
+ * @brief Action parameter definition with validation constraints
+ */
+struct ActionParameter {
+    String name;
+    ActionParameterType type;
+    bool required = true;
+    JsonVariant defaultValue;
+    float minValue = 0;
+    float maxValue = 0;
+    uint32_t maxLength = 0;
+    String description = "";
+};
+
+/**
+ * @brief Component action definition
+ */
+struct ComponentAction {
+    String name;
+    String description;
+    std::vector<ActionParameter> parameters;
+    uint32_t timeoutMs = 30000;  // Default 30s timeout
+    bool requiresReady = true;   // Requires component to be in READY state
+};
+
+/**
+ * @brief Action execution result
+ */
+struct ActionResult {
+    bool success = false;
+    String message = "";
+    JsonDocument data;
+    uint32_t executionTimeMs = 0;
+    String actionName = "";
+};
+
+/**
  * @brief Base class for all IoT components
  * 
  * Provides schema-driven configuration, lifecycle management,
@@ -57,6 +105,7 @@ protected:
     JsonDocument m_configuration;
     JsonDocument m_schema;
     JsonDocument m_lastData;
+    String m_lastDataString;  // Alternative storage for debugging
     String m_lastError;
     
     uint32_t m_nextExecutionMs = 0;
@@ -238,8 +287,140 @@ public:
      * @return Statistics as JSON document
      */
     JsonDocument getStatistics() const;
+    
+    /**
+     * @brief Get last execution data
+     * @return Last execution data as JSON document
+     */
+    const JsonDocument& getLastExecutionData() const { return m_lastData; }
+    
+    /**
+     * @brief Get core sensor data (for lightweight dashboard display)
+     * 
+     * Components should override this to return only essential sensor values
+     * without diagnostic/debug information. Default implementation returns
+     * the full last execution data.
+     * 
+     * Example core data for a temperature sensor:
+     * {
+     *   "temperature": 23.5,
+     *   "humidity": 65.2,
+     *   "timestamp": 12345
+     * }
+     * 
+     * @return Core sensor data as JSON document
+     */
+    virtual JsonDocument getCoreData() const;
+    
+    /**
+     * @brief Store execution data as string (for debugging)
+     * @param data JSON string to store
+     */
+    void storeExecutionDataString(const String& data) { m_lastDataString = data; }
+    
+    /**
+     * @brief Get last execution data as string
+     * @return Last execution data as JSON string
+     */
+    const String& getLastExecutionDataString() const { return m_lastDataString; }
+    
+    /**
+     * @brief Fetch remote data via orchestrator HTTP service
+     * @param url Full URL to fetch from
+     * @param timeoutMs HTTP timeout (default: 5000ms)  
+     * @return JsonDocument with response or error info
+     */
+    JsonDocument fetchRemoteData(const String& url, uint32_t timeoutMs = 5000);
+    
+    // === Enhanced Configuration Persistence ===
+    
+    /**
+     * @brief Save current component configuration to persistent storage
+     * Base class orchestrates: calls child's getCurrentConfig() then saves to LittleFS
+     * @return true if saved successfully
+     */
+    bool saveCurrentConfiguration();
+    
+    /**
+     * @brief Load configuration from persistent storage and apply
+     * Base class orchestrates: loads from LittleFS then calls child's applyConfig()
+     * @return true if loaded and applied successfully
+     */
+    bool loadStoredConfiguration();
+    
+    /**
+     * @brief Get current component configuration as JSON (public accessor)
+     * @return JsonDocument containing all current settings
+     */
+    JsonDocument getConfigurationAsJson() const { return getCurrentConfig(); }
+    
+    /**
+     * @brief Apply configuration to component variables (public accessor)
+     * @param config Configuration to apply (may be empty for defaults)
+     * @return true if configuration applied successfully
+     */
+    bool applyConfigurationFromJson(const JsonDocument& config) { return applyConfig(config); }
+
+    // === Component Action System ===
+    
+    /**
+     * @brief Get list of available actions for this component
+     * @return Vector of available actions with parameter definitions
+     */
+    std::vector<ComponentAction> getAvailableActions() const { return getSupportedActions(); }
+    
+    /**
+     * @brief Execute a component action with validated parameters
+     * @param actionName Name of the action to execute
+     * @param parameters JSON object containing action parameters
+     * @return Action execution result with success status and data
+     */
+    ActionResult executeAction(const String& actionName, const JsonDocument& parameters);
+    
+    /**
+     * @brief Validate action parameters against action definition
+     * @param action Action definition containing parameter constraints
+     * @param parameters JSON object with parameter values to validate
+     * @return true if all parameters are valid
+     */
+    bool validateActionParameters(const ComponentAction& action, const JsonDocument& parameters);
 
 protected:
+    // === Configuration Management (Child classes MUST implement) ===
+    
+    /**
+     * @brief Get current component configuration as JSON
+     * Child classes must return their complete current state
+     * @return JsonDocument containing all current settings
+     */
+    virtual JsonDocument getCurrentConfig() const = 0;
+    
+    /**
+     * @brief Apply configuration to component variables
+     * Child classes must populate all variables from config or defaults
+     * @param config Configuration to apply (may be empty for defaults)
+     * @return true if configuration applied successfully
+     */
+    virtual bool applyConfig(const JsonDocument& config) = 0;
+    
+    // === Action System (Child classes MUST implement) ===
+    
+    /**
+     * @brief Get supported actions for this component type
+     * Child classes must return their action definitions with parameter validation
+     * @return Vector of ComponentAction definitions
+     */
+    virtual std::vector<ComponentAction> getSupportedActions() const = 0;
+    
+    /**
+     * @brief Execute a specific action with validated parameters
+     * Child classes implement the actual action logic
+     * @param actionName Name of the action to execute
+     * @param parameters Validated JSON parameters
+     * @return ActionResult with execution status and data
+     */
+    virtual ActionResult performAction(const String& actionName, const JsonDocument& parameters) = 0;
+    
     /**
      * @brief Set error message and update state
      * @param error Error message
@@ -292,6 +473,14 @@ protected:
      * @brief Update last execution timestamp and increment counter
      */
     void updateExecutionStats();
+    
+    /**
+     * @brief Validate individual parameter value against constraints
+     * @param param Parameter definition with validation constraints
+     * @param value Parameter value to validate
+     * @return true if parameter value is valid
+     */
+    bool validateParameterValue(const ActionParameter& param, JsonVariantConst value);
 };
 
 #endif // BASE_COMPONENT_H

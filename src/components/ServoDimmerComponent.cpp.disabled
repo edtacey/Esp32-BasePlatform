@@ -16,7 +16,7 @@ JsonDocument ServoDimmerComponent::getDefaultSchema() const {
     
     schema["type"] = "object";
     schema["properties"]["device_ip"]["type"] = "string";
-    schema["properties"]["device_ip"]["default"] = "192.168.1.157";
+    schema["properties"]["device_ip"]["default"] = "192.168.1.161";
     schema["properties"]["device_ip"]["description"] = "IP address of servo dimmer device";
     
     schema["properties"]["device_port"]["type"] = "integer";
@@ -159,6 +159,13 @@ ExecutionResult ServoDimmerComponent::execute() {
         setError(result.message);
     }
     
+    // Store last execution data for API/dashboard access
+    // Deep copy the data using serialize/deserialize to ensure it persists
+    String dataStr;
+    serializeJson(result.data, dataStr);
+    m_lastData.clear();
+    deserializeJson(m_lastData, dataStr);
+    
     updateMovementSchedule();
     updateExecutionStats();
     result.executionTimeMs = millis() - startTime;
@@ -212,20 +219,49 @@ float ServoDimmerComponent::getCurrentLumens() const {
     return calculateLumensFromPosition(m_currentPosition);
 }
 
-bool ServoDimmerComponent::applyConfiguration(const JsonDocument& config) {
-    m_deviceIP = config["device_ip"] | "192.168.1.157";
+JsonDocument ServoDimmerComponent::getCurrentConfig() const {
+    JsonDocument config;
+    
+    config["device_ip"] = m_deviceIP;
+    config["device_port"] = m_devicePort;
+    config["base_lumens"] = m_baseLumens;
+    config["check_interval_ms"] = m_checkIntervalMs;
+    config["http_timeout_ms"] = m_httpTimeoutMs;
+    config["enable_movement"] = m_enableMovement;
+    config["initial_position"] = 0; // Current implementation doesn't track this
+    config["config_version"] = m_configVersion;
+    
+    return config;
+}
+
+bool ServoDimmerComponent::applyConfig(const JsonDocument& config) {
+    // Apply configuration with default hydration
+    m_deviceIP = config["device_ip"] | "192.168.1.161";
     m_devicePort = config["device_port"] | 80;
     m_baseLumens = config["base_lumens"] | 1000.0f;
     m_checkIntervalMs = config["check_interval_ms"] | 30000;
     m_httpTimeoutMs = config["http_timeout_ms"] | 5000;
     m_enableMovement = config["enable_movement"] | true;
     
+    // Handle version migration if needed
+    uint16_t configVersion = config["config_version"] | 1;
+    if (configVersion < m_configVersion) {
+        log(Logger::INFO, "Migrating configuration from version " + String(configVersion) + " to " + String(m_configVersion));
+        // Future migration logic would go here
+    }
+    
+    // Apply HTTP timeout to client
     m_httpClient.setTimeout(m_httpTimeoutMs);
     
     log(Logger::INFO, "Configuration applied - Device: " + m_deviceIP + ":" + String(m_devicePort) + 
         ", Base lumens: " + String(m_baseLumens) + ", Check interval: " + String(m_checkIntervalMs) + "ms");
     
     return true;
+}
+
+bool ServoDimmerComponent::applyConfiguration(const JsonDocument& config) {
+    // Legacy method - now delegates to new architecture
+    return applyConfig(config);
 }
 
 bool ServoDimmerComponent::queryDeviceStatus() {
@@ -279,6 +315,7 @@ bool ServoDimmerComponent::sendPositionCommand(int position) {
     int httpCode = m_httpClient.POST(postData);
     
     if (httpCode == HTTP_CODE_OK) {
+        m_deviceOnline = true;  // Mark device as online on successful communication
         log(Logger::DEBUG, "Position command sent successfully: " + String(position) + "%");
         m_httpClient.end();
         return true;
@@ -333,6 +370,8 @@ String ServoDimmerComponent::buildSetURL() const {
 
 void ServoDimmerComponent::handleHttpError(int httpCode, const String& operation) {
     m_communicationErrors++;
+    m_deviceOnline = false;  // Mark device as offline on any communication error
+    
     String errorMsg = "HTTP error during " + operation + ": " + String(httpCode);
     
     if (httpCode == HTTPC_ERROR_CONNECTION_REFUSED) {
@@ -350,4 +389,17 @@ void ServoDimmerComponent::handleHttpError(int httpCode, const String& operation
 
 bool ServoDimmerComponent::validatePosition(int position) const {
     return position >= 0 && position <= 100;
+}
+
+std::vector<ComponentAction> ServoDimmerComponent::getSupportedActions() const {
+    std::vector<ComponentAction> actions;
+    // TODO: Add servo dimmer actions
+    return actions;
+}
+
+ActionResult ServoDimmerComponent::performAction(const String& actionName, const JsonDocument& parameters) {
+    ActionResult result;
+    result.success = false;
+    result.message = "Action not implemented: " + actionName;
+    return result;
 }

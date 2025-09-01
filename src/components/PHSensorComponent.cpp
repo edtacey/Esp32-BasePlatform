@@ -204,6 +204,14 @@ ExecutionResult PHSensorComponent::execute() {
     uint32_t nextExecutionTime = calculateNextExecutionTime();
     setNextExecutionMs(nextExecutionTime);
     
+    // CRITICAL: Update execution statistics
+    updateExecutionStats();
+    
+    // Store last execution data for API/dashboard access
+    String dataStr;
+    serializeJson(data, dataStr);
+    storeExecutionDataString(dataStr);  // Store as string for API access
+    
     result.success = true;
     result.data = data;
     result.executionTimeMs = millis() - startTime;
@@ -385,6 +393,42 @@ ActionResult PHSensorComponent::performAction(const String& actionName, const Js
     return result;
 }
 
+JsonDocument PHSensorComponent::getCoreData() const {
+    JsonDocument coreData;
+    
+    // For pH sensors, core data is pH value, temperature, and success status
+    if (!m_lastData.isNull() && m_lastData.size() > 0) {
+        // Extract only the essential sensor values
+        if (!m_lastData["current ph"].isNull()) {
+            coreData["ph"] = m_lastData["current ph"];
+        }
+        if (!m_lastData["current temp"].isNull()) {
+            coreData["temperature"] = m_lastData["current temp"];
+        }
+        if (!m_lastData["current volts"].isNull()) {
+            coreData["voltage"] = m_lastData["current volts"];
+        }
+        if (!m_lastData["success"].isNull()) {
+            coreData["success"] = m_lastData["success"];
+        }
+        if (!m_lastData["timestamp"].isNull()) {
+            coreData["timestamp"] = m_lastData["timestamp"];
+        }
+        if (!m_lastData["is calibrated"].isNull()) {
+            coreData["calibrated"] = m_lastData["is calibrated"];
+        }
+        
+        log(Logger::DEBUG, String("[CORE-DATA] PHSensor ") + m_componentId + " returning " + 
+            String(coreData.size()) + " core fields");
+    } else {
+        // No data available
+        coreData["status"] = "No data available";
+        log(Logger::DEBUG, String("[CORE-DATA] PHSensor ") + m_componentId + " has no data");
+    }
+    
+    return coreData;
+}
+
 bool PHSensorComponent::calibrate(float ph4_voltage, float ph7_voltage, float ph10_voltage) {
     log(Logger::INFO, "Performing 3-point pH calibration");
     
@@ -541,6 +585,25 @@ void PHSensorComponent::addReading(float voltage) {
 }
 
 float PHSensorComponent::convertVoltageToPH(float voltage, float temperature_c) const {
+    // In mock mode, provide simulated pH values without calibration
+    if (m_currentMode == PHSensorMode::MOCK) {
+        // Simulate pH 7.0 ± variations based on voltage
+        // Mock voltage is around 1.65V for neutral pH
+        float basePH = 7.0f;
+        float voltageDeviation = voltage - 1.65f;
+        float ph = basePH - (voltageDeviation * 10.0f); // ~10 pH units per volt
+        
+        // Apply temperature compensation
+        float tempCompensation = m_tempCoefficient * (temperature_c - 25.0f);
+        ph += tempCompensation;
+        
+        // Clamp to valid pH range
+        if (ph < 0.0f) ph = 0.0f;
+        if (ph > 14.0f) ph = 14.0f;
+        
+        return ph;
+    }
+    
     if (!isCalibrated()) return -1.0f;
     
     // Basic linear interpolation between calibration points
@@ -575,7 +638,7 @@ float PHSensorComponent::getTemperatureReading() {
 }
 
 bool PHSensorComponent::updateCalibrationFromConfig(const JsonDocument& config) {
-    if (!config.containsKey("calibration_points")) return true;
+    if (config["calibration_points"].isNull()) return true;
     
     JsonArrayConst calibration = config["calibration_points"];
     for (size_t i = 0; i < calibration.size() && i < 3; i++) {
@@ -749,6 +812,11 @@ BaseComponent* PHSensorComponent::getExciteVoltageComponent() {
 
 float PHSensorComponent::calculateWeightedAverageWithOutlierRemoval() {
     if (m_lastReads.empty()) return 0.0f;
+    
+    // If only one reading, return it directly (no outlier removal needed)
+    if (m_lastReads.size() == 1) {
+        return m_lastReads[0];
+    }
     
     // Create a copy for outlier removal without affecting original data
     std::vector<float> cleanedReads = m_lastReads;

@@ -65,14 +65,31 @@ public:
      */
     float getCurrentLumens() const;
 
+protected:
+    // === Configuration Management (BaseComponent virtual methods) ===
+    
+    /**
+     * @brief Get current component configuration as JSON
+     * @return JsonDocument containing all current settings
+     */
+    JsonDocument getCurrentConfig() const override;
+    
+    /**
+     * @brief Apply configuration to component variables
+     * @param config Configuration to apply (may be empty for defaults)
+     * @return true if configuration applied successfully
+     */
+    bool applyConfig(const JsonDocument& config) override;
+
 private:
     // Configuration parameters
-    String m_deviceIP = "192.168.1.157";        // IP address of servo dimmer device
+    String m_deviceIP = "192.168.1.161";        // IP address of servo dimmer device
     uint16_t m_devicePort = 80;                  // HTTP port
     float m_baseLumens = 1000.0f;               // Base lumens at 100% position
     uint32_t m_checkIntervalMs = 30000;         // Position check/update interval (30s)
     uint32_t m_httpTimeoutMs = 5000;            // HTTP request timeout
-    bool m_enableMovement = true;                // Allow position changes
+    bool m_enableMovement = true;               // Allow position changes
+    uint16_t m_configVersion = 1;               // Configuration version for migration
     
     // Servo state
     int m_currentPosition = 0;                   // Current servo position (0-100%)
@@ -104,4 +121,8 @@ private:
     String buildSetURL() const;
     void handleHttpError(int httpCode, const String& operation);
     bool validatePosition(int position) const;
+
+    // === Action System (BaseComponent virtual methods) ===
+    std::vector<ComponentAction> getSupportedActions() const override;
+    ActionResult performAction(const String& actionName, const JsonDocument& parameters) override;
 };

@@ -145,6 +145,9 @@ ExecutionResult LightOrchestrator::execute() {
         // Update sensor readings
         updateSensorReadings();
         
+        // Update sweep test if active
+        updateSweepTest();
+        
         // Calculate weighted average of sensor readings
         float currentAverage = calculateWeightedAverage();
         m_lastSensorAverage = currentAverage;
@@ -185,6 +188,9 @@ ExecutionResult LightOrchestrator::execute() {
         result.data["min_recorded_reading"] = m_minRecordedReading;
         result.data["increment_step"] = m_incrementStep;
         result.data["sample_pool_size"] = m_samplePoolSize;
+        result.data["sweep_test_active"] = m_sweepTestActive;
+        result.data["sweep_current_position"] = m_sweepCurrentPosition;
+        result.data["sweep_direction_up"] = m_sweepDirectionUp;
         
         // Add sensor details
         JsonArray sensorsArray = result.data["sensors"].to<JsonArray>();
@@ -212,6 +218,13 @@ ExecutionResult LightOrchestrator::execute() {
         result.message = "Unexpected error during light orchestration";
         setError(result.message);
     }
+    
+    // Store last execution data for API/dashboard access
+    // Deep copy the data using serialize/deserialize to ensure it persists  
+    String dataStr;
+    serializeJson(result.data, dataStr);
+    m_lastData.clear();
+    deserializeJson(m_lastData, dataStr);
     
     // Schedule next execution
     setNextExecutionMs(millis() + m_adjustmentIntervalMs);
@@ -263,7 +276,32 @@ float LightOrchestrator::getAverageSensorReading() const {
     return m_lastSensorAverage;
 }
 
-bool LightOrchestrator::applyConfiguration(const JsonDocument& config) {
+JsonDocument LightOrchestrator::getCurrentConfig() const {
+    JsonDocument config;
+    
+    config["def_max_lumens"] = m_defMaxLumens;
+    config["def_min_lumens"] = m_defMinLumens;
+    config["target_lumens"] = m_targetLumens;
+    config["sample_pool_size"] = m_samplePoolSize;
+    config["increment_step"] = m_incrementStep;
+    config["adjustment_interval_ms"] = m_adjustmentIntervalMs;
+    config["servo_dimmer_id"] = m_servoDimmerComponentId;
+    config["auto_adjustment"] = m_autoAdjustmentEnabled;
+    config["lighting_mode"] = getLightingModeString(m_lightingMode);
+    
+    // Store configured light sensors (up to 4)
+    if (m_lightSensors.size() > 0) config["light_sensor_1"] = m_lightSensors[0].componentId;
+    if (m_lightSensors.size() > 1) config["light_sensor_2"] = m_lightSensors[1].componentId;
+    if (m_lightSensors.size() > 2) config["light_sensor_3"] = m_lightSensors[2].componentId;
+    if (m_lightSensors.size() > 3) config["light_sensor_4"] = m_lightSensors[3].componentId;
+    
+    config["config_version"] = 1;
+    
+    return config;
+}
+
+bool LightOrchestrator::applyConfig(const JsonDocument& config) {
+    // Apply configuration with default hydration
     m_defMaxLumens = config["def_max_lumens"] | 1000.0f;
     m_defMinLumens = config["def_min_lumens"] | 50.0f;
     m_targetLumens = config["target_lumens"] | 500.0f;
@@ -273,11 +311,11 @@ bool LightOrchestrator::applyConfiguration(const JsonDocument& config) {
     m_servoDimmerComponentId = config["servo_dimmer_id"] | "servo-dimmer-1";
     m_autoAdjustmentEnabled = config["auto_adjustment"] | true;
     
-    // Parse lighting mode
+    // Parse lighting mode with default
     String modeStr = config["lighting_mode"] | "morning";
     m_lightingMode = stringToLightingMode(modeStr);
     
-    // Configure light sensors
+    // Configure light sensors with defaults
     m_lightSensors.clear();
     String sensorIds[4] = {
         config["light_sensor_1"] | "tsl2561-1",
@@ -296,17 +334,29 @@ bool LightOrchestrator::applyConfiguration(const JsonDocument& config) {
         }
     }
     
-    // Set mode-specific lumen targets
+    // Set mode-specific lumen targets (hardcoded for now)
     m_modeLumens[0] = 300.0f; // Morning
     m_modeLumens[1] = 800.0f; // Noon  
     m_modeLumens[2] = 200.0f; // Twilight
     m_modeLumens[3] = 100.0f; // Night
+    
+    // Handle version migration if needed
+    uint16_t configVersion = config["config_version"] | 1;
+    if (configVersion < 1) {
+        log(Logger::INFO, "Migrating LightOrchestrator configuration to version 1");
+        // Future migration logic would go here
+    }
     
     log(Logger::INFO, String("Configuration applied - Max: ") + String(m_defMaxLumens) + 
         ", Min: " + String(m_defMinLumens) + ", Sensors: " + String(m_lightSensors.size()) + 
         ", Mode: " + getLightingModeString(m_lightingMode));
     
     return true;
+}
+
+bool LightOrchestrator::applyConfiguration(const JsonDocument& config) {
+    // Legacy method - now delegates to new architecture
+    return applyConfig(config);
 }
 
 bool LightOrchestrator::validateSensorComponents() {
@@ -619,6 +669,19 @@ BaseComponent* LightOrchestrator::getComponentById(const String& componentId) {
     return nullptr;
 }
 
+std::vector<ComponentAction> LightOrchestrator::getSupportedActions() const {
+    std::vector<ComponentAction> actions;
+    // TODO: Add light orchestrator actions
+    return actions;
+}
+
+ActionResult LightOrchestrator::performAction(const String& actionName, const JsonDocument& parameters) {
+    ActionResult result;
+    result.success = false;
+    result.message = "Action not implemented: " + actionName;
+    return result;
+}
+
 JsonDocument LightOrchestrator::getSensorData(const String& componentId) {
     BaseComponent* component = getComponentById(componentId);
     if (!component) {
@@ -635,4 +698,99 @@ JsonDocument LightOrchestrator::getSensorData(const String& componentId) {
     }
     
     return JsonDocument();
+}
+
+bool LightOrchestrator::startSweepTest() {
+    if (m_sweepTestActive) {
+        log(Logger::INFO, "Sweep test already active");
+        return false;
+    }
+    
+    // Disable auto adjustment during sweep test
+    m_autoAdjustmentEnabled = false;
+    
+    // Initialize sweep test state
+    m_sweepTestActive = true;
+    m_sweepCurrentPosition = 0;
+    m_sweepDirectionUp = true;
+    m_sweepLastMoveMs = millis();
+    
+    // Send first command to set position to 0%
+    if (sendServoCommand(0.0f)) {
+        log(Logger::INFO, "Started sweep test - moving from 0% to 100% in 5% increments");
+        m_lastAdjustmentReason = "Sweep test started at 0%";
+        return true;
+    } else {
+        // Failed to start, reset state
+        m_sweepTestActive = false;
+        m_autoAdjustmentEnabled = true;
+        log(Logger::WARNING, "Failed to start sweep test - servo command failed");
+        return false;
+    }
+}
+
+bool LightOrchestrator::stopSweepTest() {
+    if (!m_sweepTestActive) {
+        return true; // Already stopped
+    }
+    
+    // Stop the sweep test
+    m_sweepTestActive = false;
+    
+    // Return to 0% position
+    sendServoCommand(0.0f);
+    
+    // Re-enable auto adjustment
+    m_autoAdjustmentEnabled = true;
+    
+    log(Logger::INFO, "Sweep test stopped - returned to 0% position");
+    m_lastAdjustmentReason = "Sweep test completed";
+    
+    return true;
+}
+
+void LightOrchestrator::updateSweepTest() {
+    if (!m_sweepTestActive) {
+        return;
+    }
+    
+    uint32_t currentMs = millis();
+    
+    // Check if it's time for the next move (every 2 seconds)
+    if (currentMs - m_sweepLastMoveMs < m_sweepIntervalMs) {
+        return;
+    }
+    
+    // Calculate next position based on direction
+    if (m_sweepDirectionUp) {
+        m_sweepCurrentPosition += m_sweepStepSize;
+        
+        // Check if we've reached the top (100%)
+        if (m_sweepCurrentPosition >= 100) {
+            m_sweepCurrentPosition = 100;
+            m_sweepDirectionUp = false; // Start going down
+        }
+    } else {
+        m_sweepCurrentPosition -= m_sweepStepSize;
+        
+        // Check if we've reached the bottom (0%)
+        if (m_sweepCurrentPosition <= 0) {
+            m_sweepCurrentPosition = 0;
+            // Sweep test complete, stop it
+            stopSweepTest();
+            return;
+        }
+    }
+    
+    // Send servo command for new position
+    float positionPercent = (float)m_sweepCurrentPosition / 100.0f;
+    if (sendServoCommand(positionPercent)) {
+        m_sweepLastMoveMs = currentMs;
+        m_lastAdjustmentReason = "Sweep test at " + String(m_sweepCurrentPosition) + "%";
+        
+        String direction = m_sweepDirectionUp ? "up" : "down";
+        log(Logger::DEBUG, "Sweep test moving " + direction + " to " + String(m_sweepCurrentPosition) + "%");
+    } else {
+        log(Logger::WARNING, "Sweep test servo command failed at " + String(m_sweepCurrentPosition) + "%");
+    }
 }

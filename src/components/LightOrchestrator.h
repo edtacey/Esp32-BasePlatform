@@ -54,6 +54,23 @@ public:
     ExecutionResult execute() override;
     void cleanup() override;
 
+protected:
+    // === Configuration Management (BaseComponent virtual methods) ===
+    
+    /**
+     * @brief Get current component configuration as JSON
+     * @return JsonDocument containing all current settings
+     */
+    JsonDocument getCurrentConfig() const override;
+    
+    /**
+     * @brief Apply configuration to component variables
+     * @param config Configuration to apply (may be empty for defaults)
+     * @return true if configuration applied successfully
+     */
+    bool applyConfig(const JsonDocument& config) override;
+
+public:
     // Public API methods
     /**
      * @brief Set target lumens for current lighting mode
@@ -86,6 +103,24 @@ public:
      * @return Weighted average of all valid sensors
      */
     float getAverageSensorReading() const;
+    
+    /**
+     * @brief Start light sweep test (0% to 100% in 5% increments, then back to 0%)
+     * @return true if sweep test started successfully
+     */
+    bool startSweepTest();
+    
+    /**
+     * @brief Stop active sweep test and return to normal operation
+     * @return true if sweep test stopped
+     */
+    bool stopSweepTest();
+    
+    /**
+     * @brief Check if sweep test is currently running
+     * @return true if sweep test is active
+     */
+    bool isSweepTestActive() const { return m_sweepTestActive; }
 
 private:
     // Configuration parameters
@@ -125,6 +160,14 @@ private:
     float m_maxRecordedReading = 0.0f;
     float m_minRecordedReading = 10000.0f;
     
+    // Sweep test state
+    bool m_sweepTestActive = false;
+    int m_sweepCurrentPosition = 0;
+    bool m_sweepDirectionUp = true;
+    uint32_t m_sweepLastMoveMs = 0;
+    uint32_t m_sweepIntervalMs = 2000;  // 2 seconds between moves
+    int m_sweepStepSize = 5;            // 5% increments
+    
     // Private methods
     bool applyConfiguration(const JsonDocument& config);
     bool validateSensorComponents();
@@ -142,4 +185,9 @@ private:
     void updateSensorStatistics(float reading);
     BaseComponent* getComponentById(const String& componentId);
     JsonDocument getSensorData(const String& componentId);
+    void updateSweepTest();
+
+    // === Action System (BaseComponent virtual methods) ===
+    std::vector<ComponentAction> getSupportedActions() const override;
+    ActionResult performAction(const String& actionName, const JsonDocument& parameters) override;
 };

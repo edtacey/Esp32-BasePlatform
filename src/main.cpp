@@ -11,7 +11,10 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <LittleFS.h>
+#include <time.h>
+#include <WiFiUdp.h>
 #include "utils/Logger.h"
+#include "utils/TimeUtils.h"
 #include "core/Orchestrator.h"
 
 // WiFi credentials
@@ -22,6 +25,7 @@ const char* WIFI_PASSWORD = "spindle1";
 void setup();
 void loop();
 void connectWiFi();
+void initializeNTP();
 void printHeartbeat();
 void checkLittleFS();
 
@@ -31,6 +35,12 @@ Orchestrator orchestrator;
 // Heartbeat timing
 unsigned long lastHeartbeat = 0;
 const unsigned long HEARTBEAT_INTERVAL = 5000; // 5 seconds
+
+// NTP configuration
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 0;     // UTC offset
+const int daylightOffset_sec = 0; // No daylight saving
+time_t bootTime = 0;              // System boot time in epoch seconds
 
 /**
  * @brief Arduino setup function
@@ -51,6 +61,11 @@ void setup() {
     
     // Connect to WiFi
     connectWiFi();
+    
+    // Initialize NTP time synchronization
+    if (WiFi.status() == WL_CONNECTED) {
+        initializeNTP();
+    }
     
     // Initialize orchestrator
     if (!orchestrator.init()) {
@@ -125,8 +140,9 @@ void printHeartbeat() {
     // Uptime
     unsigned long uptime = millis() / 1000;
     
-    // Create heartbeat message
-    String heartbeat = String("❤️ HEARTBEAT | Uptime: ") + uptime + "s | " +
+    // Create heartbeat message with timestamp
+    String timestamp = TimeUtils::getCurrentTimestamp();
+    String heartbeat = String("❤️ HEARTBEAT | Time: ") + timestamp + " | Uptime: " + uptime + "s | " +
                       "Memory: " + String(memoryUsage, 1) + "% (" + usedHeap/1024 + "KB/" + totalHeap/1024 + "KB) | " +
                       "IP: " + ipAddress;
     
@@ -141,45 +157,127 @@ void printHeartbeat() {
  * @brief Check LittleFS partition and mounting status
  */
 void checkLittleFS() {
-    Logger::info("main", "Checking LittleFS partition and mounting...");
+    Logger::info("main", "=== LittleFS PARTITION DETECTION & VERIFICATION ===");
+    
+    // Check partition table info
+    Logger::info("main", "Checking partition table for LittleFS/SPIFFS partition...");
     
     // Try to mount LittleFS
+    Logger::info("main", "Attempting LittleFS.begin(false) - no format on fail...");
     bool mounted = LittleFS.begin(false);  // Don't format on failure initially
     
     if (mounted) {
-        Logger::info("main", "LittleFS mounted successfully");
+        Logger::info("main", "✅ LittleFS mounted successfully!");
         
         // Get filesystem info
         size_t totalBytes = LittleFS.totalBytes();
         size_t usedBytes = LittleFS.usedBytes();
         float usage = (float)usedBytes / totalBytes * 100.0f;
         
-        Logger::info("main", String("LittleFS: ") + usedBytes/1024 + "KB/" + totalBytes/1024 + "KB used (" + String(usage, 1) + "%)");
+        Logger::info("main", String("📊 LittleFS Stats: ") + usedBytes/1024 + "KB/" + totalBytes/1024 + "KB used (" + String(usage, 1) + "%)");
+        Logger::info("main", String("📊 Total bytes: ") + totalBytes + ", Used bytes: " + usedBytes);
         
-        // Test write to verify functionality
+        // Check if key directories exist
+        Logger::info("main", "🔍 Checking filesystem structure...");
+        Logger::info("main", String("📁 /www exists: ") + (LittleFS.exists("/www") ? "YES" : "NO"));
+        Logger::info("main", String("📁 /config exists: ") + (LittleFS.exists("/config") ? "YES" : "NO"));
+        Logger::info("main", String("📁 /system exists: ") + (LittleFS.exists("/system") ? "YES" : "NO"));
+        Logger::info("main", String("📁 /logs exists: ") + (LittleFS.exists("/logs") ? "YES" : "NO"));
+        
+        // Check specific web files
+        Logger::info("main", String("📄 /www/index.html exists: ") + (LittleFS.exists("/www/index.html") ? "YES" : "NO"));
+        Logger::info("main", String("📄 /www/dashboard.html exists: ") + (LittleFS.exists("/www/dashboard.html") ? "YES" : "NO"));
+        Logger::info("main", String("📄 /www/style.css exists: ") + (LittleFS.exists("/www/style.css") ? "YES" : "NO"));
+        Logger::info("main", String("📄 /www/app.js exists: ") + (LittleFS.exists("/www/app.js") ? "YES" : "NO"));
+        
+        // Test write/read operations
+        Logger::info("main", "🧪 Testing LittleFS write/read operations...");
         File testFile = LittleFS.open("/test.txt", "w");
         if (testFile) {
-            testFile.println("ESP32 IoT Orchestrator LittleFS Test");
+            String testData = "ESP32 IoT Orchestrator LittleFS Test - " + String(millis());
+            testFile.println(testData);
             testFile.close();
-            Logger::info("main", "LittleFS write test: SUCCESS");
+            Logger::info("main", "✅ LittleFS write test: SUCCESS");
             
-            // Clean up test file
-            LittleFS.remove("/test.txt");
+            // Test read
+            testFile = LittleFS.open("/test.txt", "r");
+            if (testFile) {
+                String readData = testFile.readString();
+                testFile.close();
+                Logger::info("main", String("✅ LittleFS read test: SUCCESS - Data: ") + readData.substring(0, 50));
+                
+                // Clean up test file
+                if (LittleFS.remove("/test.txt")) {
+                    Logger::info("main", "✅ LittleFS delete test: SUCCESS");
+                } else {
+                    Logger::error("main", "❌ LittleFS delete test: FAILED");
+                }
+            } else {
+                Logger::error("main", "❌ LittleFS read test: FAILED");
+            }
         } else {
-            Logger::error("main", "LittleFS write test: FAILED");
+            Logger::error("main", "❌ LittleFS write test: FAILED - Cannot create test file");
         }
         
+        Logger::info("main", "=== LittleFS VERIFICATION COMPLETE ===");
+        
     } else {
-        Logger::error("main", "LittleFS mount failed - attempting format...");
+        Logger::error("main", "❌ LittleFS mount failed - attempting format...");
         
         // Try to format and mount
+        Logger::info("main", "🔄 Attempting LittleFS.begin(true) - format on fail...");
         if (LittleFS.begin(true)) {  // Format on failure
-            Logger::info("main", "LittleFS formatted and mounted successfully");
+            Logger::info("main", "✅ LittleFS formatted and mounted successfully!");
             
             size_t totalBytes = LittleFS.totalBytes();
-            Logger::info("main", String("LittleFS: Formatted ") + totalBytes/1024 + "KB available");
+            Logger::info("main", String("📊 LittleFS: Formatted ") + totalBytes/1024 + "KB available");
+            Logger::info("main", "⚠️  Warning: Filesystem was formatted - all data lost!");
         } else {
-            Logger::error("main", "LittleFS format and mount FAILED - check partition table!");
+            Logger::error("main", "❌ CRITICAL: LittleFS format and mount FAILED - check partition table!");
+            Logger::error("main", "❌ Partition 'spiffs' may not exist or be corrupted");
         }
     }
 }
+
+/**
+ * @brief Initialize NTP time synchronization
+ */
+void initializeNTP() {
+    Logger::info("main", "Initializing NTP time synchronization...");
+    
+    // Configure NTP
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    
+    // Wait for time synchronization
+    Logger::info("main", "Waiting for NTP time sync...");
+    
+    int attempts = 0;
+    while (!time(nullptr) && attempts < 30) {
+        delay(1000);
+        Serial.print(".");
+        attempts++;
+    }
+    
+    time_t now = time(nullptr);
+    if (now > 0) {
+        // Calculate actual boot time by subtracting uptime
+        unsigned long uptimeSeconds = millis() / 1000;
+        time_t actualBootTime = now - uptimeSeconds;
+        
+        bootTime = actualBootTime;  // Record actual boot time
+        TimeUtils::setBootTime(actualBootTime);  // Share with TimeUtils
+        
+        // Format and display current time
+        struct tm* timeinfo = localtime(&now);
+        char timeStr[64];
+        strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S UTC", timeinfo);
+        
+        Logger::info("main", String("NTP sync successful! Current time: ") + timeStr);
+        Logger::info("main", String("System boot time: ") + actualBootTime + " (epoch seconds)");
+        Logger::info("main", String("Uptime at NTP sync: ") + uptimeSeconds + " seconds");
+    } else {
+        Logger::error("main", "NTP sync failed - using millis() for timing");
+        bootTime = 0;  // Indicate NTP failed
+    }
+}
+

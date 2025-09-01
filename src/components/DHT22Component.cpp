@@ -24,10 +24,8 @@ JsonDocument DHT22Component::getDefaultSchema() const {
     schema["description"] = "DHT22/AM2302 sensor configuration schema";
     schema["type"] = "object";
     
-    // Required fields
-    JsonArray required = schema["required"].to<JsonArray>();
-    required.add("pin");
-    required.add("samplingIntervalMs");
+    // No required fields with default hydration architecture
+    // All fields have defaults and are applied automatically
     
     // Properties with defaults
     JsonObject properties = schema["properties"].to<JsonObject>();
@@ -145,6 +143,14 @@ ExecutionResult DHT22Component::execute() {
     result.executionTimeMs = millis() - startTime;
     result.data = data;
     
+    // Store last execution data for API/dashboard access
+    // Deep copy the data using serialize/deserialize to ensure it persists
+    String dataStr;
+    serializeJson(data, dataStr);
+    storeExecutionDataString(dataStr);  // Store as string for API access
+    m_lastData.clear();
+    deserializeJson(m_lastData, dataStr);
+    
     // Schedule next execution
     setNextExecutionMs(millis() + m_samplingIntervalMs);
     
@@ -244,30 +250,33 @@ JsonDocument DHT22Component::getReadingStats() const {
 
 // Private methods
 
-bool DHT22Component::applyConfiguration(const JsonDocument& config) {
-    log(Logger::DEBUG, "Applying DHT22 configuration");
+JsonDocument DHT22Component::getCurrentConfig() const {
+    JsonDocument config;
     
-    // Extract pin
-    if (config["pin"].is<uint8_t>()) {
-        m_pin = config["pin"].as<uint8_t>();
-    }
+    config["pin"] = m_pin;
+    config["samplingIntervalMs"] = m_samplingIntervalMs;
+    config["fahrenheit"] = m_fahrenheit;
+    config["sensorType"] = m_sensorType;
+    config["sensorName"] = "DHT22 Sensor"; // Fixed value for now
+    config["config_version"] = 1;
     
-    // Extract sampling interval
-    if (config["samplingIntervalMs"].is<uint32_t>()) {
-        m_samplingIntervalMs = config["samplingIntervalMs"].as<uint32_t>();
-    }
+    return config;
+}
+
+bool DHT22Component::applyConfig(const JsonDocument& config) {
+    log(Logger::DEBUG, "Applying DHT22 configuration with default hydration");
     
-    // Extract temperature unit
-    if (config["fahrenheit"].is<bool>()) {
-        m_fahrenheit = config["fahrenheit"].as<bool>();
-    }
+    // Apply configuration with default hydration
+    m_pin = config["pin"] | 15;
+    m_samplingIntervalMs = config["samplingIntervalMs"] | 5000;
+    m_fahrenheit = config["fahrenheit"] | false;
+    m_sensorType = config["sensorType"] | 11;
     
-    // Extract sensor type (DHT11 or DHT22)
-    if (config["sensorType"].is<uint8_t>()) {
-        uint8_t type = config["sensorType"].as<uint8_t>();
-        if (type == 11 || type == 22) {
-            m_sensorType = type;
-        }
+    // Handle version migration if needed
+    uint16_t configVersion = config["config_version"] | 1;
+    if (configVersion < 1) {
+        log(Logger::INFO, "Migrating DHT22 configuration to version 1");
+        // Future migration logic would go here
     }
     
     log(Logger::DEBUG, String("Config applied: pin=") + m_pin + 
@@ -276,6 +285,11 @@ bool DHT22Component::applyConfiguration(const JsonDocument& config) {
                        ", type=DHT" + m_sensorType);
     
     return true;
+}
+
+bool DHT22Component::applyConfiguration(const JsonDocument& config) {
+    // Legacy method - now delegates to new architecture
+    return applyConfig(config);
 }
 
 bool DHT22Component::initializeSensor() {
@@ -369,4 +383,82 @@ bool DHT22Component::validateReadings(float temp, float hum) const {
     }
     
     return true;
+}
+
+// === Action System Implementation ===
+
+std::vector<ComponentAction> DHT22Component::getSupportedActions() const {
+    std::vector<ComponentAction> actions;
+    
+    // Read Status Action
+    ComponentAction statusAction;
+    statusAction.name = "read_sensor";
+    statusAction.description = "Read current temperature and humidity";
+    statusAction.timeoutMs = 5000;
+    statusAction.requiresReady = false;
+    actions.push_back(statusAction);
+    
+    return actions;
+}
+
+ActionResult DHT22Component::performAction(const String& actionName, const JsonDocument& parameters) {
+    ActionResult result;
+    result.actionName = actionName;
+    result.success = false;
+    
+    if (actionName == "read_sensor") {
+        float temp = readTemperature();
+        float humid = readHumidity();
+        
+        result.success = !isnan(temp) && !isnan(humid);
+        if (result.success) {
+            result.message = "Sensor reading successful";
+            result.data["temperature"] = temp;
+            result.data["humidity"] = humid;
+            result.data["heat_index"] = readHeatIndex();
+            result.data["unit"] = "C";
+        } else {
+            result.message = "Failed to read sensor data";
+        }
+    } else {
+        result.message = "Unknown action: " + actionName;
+    }
+    
+    return result;
+}
+
+JsonDocument DHT22Component::getCoreData() const {
+    JsonDocument coreData;
+    
+    // For DHT22 sensors, core data is temperature, humidity, and success status
+    if (!m_lastData.isNull() && m_lastData.size() > 0) {
+        // Extract only the essential sensor values
+        if (!m_lastData["temperature"].isNull()) {
+            coreData["temperature"] = m_lastData["temperature"];
+        }
+        if (!m_lastData["humidity"].isNull()) {
+            coreData["humidity"] = m_lastData["humidity"];
+        }
+        if (!m_lastData["heatIndex"].isNull()) {
+            coreData["heat_index"] = m_lastData["heatIndex"];
+        }
+        if (!m_lastData["unit"].isNull()) {
+            coreData["unit"] = m_lastData["unit"];
+        }
+        if (!m_lastData["success"].isNull()) {
+            coreData["success"] = m_lastData["success"];
+        }
+        if (!m_lastData["timestamp"].isNull()) {
+            coreData["timestamp"] = m_lastData["timestamp"];
+        }
+        
+        log(Logger::DEBUG, String("[CORE-DATA] DHT22 ") + m_componentId + " returning " + 
+            String(coreData.size()) + " core fields");
+    } else {
+        // No data available
+        coreData["status"] = "No data available";
+        log(Logger::DEBUG, String("[CORE-DATA] DHT22 ") + m_componentId + " has no data");
+    }
+    
+    return coreData;
 }

@@ -78,7 +78,10 @@ JsonDocument TemplateComponent::getDefaultSchema() const {
     // Example string parameter
     JsonObject param2Prop = properties["config_parameter_2"].to<JsonObject>();
     param2Prop["type"] = "string";
-    param2Prop["enum"].to<JsonArray>().add("option1").add("option2").add("default");
+    JsonArray enumValues = param2Prop["enum"].to<JsonArray>();
+    enumValues.add("option1");
+    enumValues.add("option2"); 
+    enumValues.add("default");
     param2Prop["default"] = "default";
     param2Prop["description"] = "Example string configuration parameter";
     

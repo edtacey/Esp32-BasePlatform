@@ -13,8 +13,29 @@
 #define TSL2561_COMPONENT_H
 
 #include "BaseComponent.h"
-#include <Adafruit_TSL2561_U.h>
 #include <Wire.h>
+
+// TSL2561 I2C addresses
+#define TSL2561_ADDR_LOW  0x29
+#define TSL2561_ADDR_FLOAT 0x39  
+#define TSL2561_ADDR_HIGH 0x49
+
+// TSL2561 registers
+#define TSL2561_REGISTER_CONTROL   0x00
+#define TSL2561_REGISTER_TIMING    0x01
+#define TSL2561_REGISTER_CHAN0_LOW 0x0C
+#define TSL2561_REGISTER_CHAN1_LOW 0x0E
+
+// Control register values
+#define TSL2561_CONTROL_POWERON    0x03
+#define TSL2561_CONTROL_POWEROFF   0x00
+
+// Timing register values (gain + integration time)
+#define TSL2561_GAIN_1X            0x00
+#define TSL2561_GAIN_16X           0x10
+#define TSL2561_INTEGRATION_13MS   0x00
+#define TSL2561_INTEGRATION_101MS  0x01  
+#define TSL2561_INTEGRATION_402MS  0x02
 
 /**
  * @brief TSL2561 light sensor component class
@@ -24,17 +45,23 @@
  */
 class TSL2561Component : public BaseComponent {
 private:
-    // Hardware
-    Adafruit_TSL2561_Unified* m_tsl = nullptr;
-    uint8_t m_i2cAddress = TSL2561_ADDR_FLOAT;  // 0x39 default
-    uint8_t m_sdaPin = 21;                      // ESP32 default SDA
-    uint8_t m_sclPin = 22;                      // ESP32 default SCL
-    uint32_t m_i2cFreq = 100000;               // 100kHz default
+    // Hardware - Direct I2C (no Adafruit library)
+    uint8_t m_i2cAddress = TSL2561_ADDR_FLOAT; // TSL2561 I2C address (0x39)
+    uint8_t m_sdaPin = 21;                     // ESP32 default SDA
+    uint8_t m_sclPin = 22;                     // ESP32 default SCL
+    uint32_t m_i2cFreq = 100000;              // 100kHz default
     
-    // Configuration
-    tsl2561Gain_t m_gain = TSL2561_GAIN_1X;           // Default gain
-    tsl2561IntegrationTime_t m_integration = TSL2561_INTEGRATIONTIME_402MS; // Default integration
-    uint32_t m_samplingIntervalMs = 2000;             // 2 seconds default
+    // Configuration - Direct register values
+    uint8_t m_gain = TSL2561_GAIN_1X;         // Default 1x gain
+    uint8_t m_integration = TSL2561_INTEGRATION_402MS; // Default 402ms integration
+    uint32_t m_samplingIntervalMs = 2000;     // 2 seconds default
+    
+    // Remote sensor configuration
+    bool m_useRemoteSensor = false;                   // Use remote sensor instead of local I2C
+    String m_remoteHost = "";                         // Remote sensor host IP/hostname
+    uint16_t m_remotePort = 80;                       // Remote sensor port
+    String m_remotePath = "/light";                   // Remote sensor endpoint path
+    uint32_t m_httpTimeoutMs = 5000;                  // HTTP timeout
     
     // State
     float m_lastLux = NAN;
@@ -88,6 +115,27 @@ public:
      */
     void cleanup() override;
 
+protected:
+    // === Configuration Management (BaseComponent virtual methods) ===
+    
+    /**
+     * @brief Get current component configuration as JSON
+     * @return JsonDocument containing all current settings
+     */
+    JsonDocument getCurrentConfig() const override;
+    
+    /**
+     * @brief Apply configuration to component variables
+     * @param config Configuration to apply (may be empty for defaults)
+     * @return true if configuration applied successfully
+     */
+    bool applyConfig(const JsonDocument& config) override;
+
+    // === Action System (BaseComponent virtual methods) ===
+    std::vector<ComponentAction> getSupportedActions() const override;
+    ActionResult performAction(const String& actionName, const JsonDocument& parameters) override;
+
+public:
     // === TSL2561 Specific Methods ===
     
     /**
@@ -132,17 +180,17 @@ public:
     
     /**
      * @brief Set sensor gain
-     * @param gain New gain setting
+     * @param gainStr Gain setting ("1x" or "16x")
      * @return true if gain set successfully
      */
-    bool setGain(tsl2561Gain_t gain);
+    bool setGain(const String& gainStr);
     
     /**
      * @brief Set integration time
-     * @param integration New integration time
+     * @param integrationStr Integration time ("13ms", "101ms", "402ms")
      * @return true if integration time set successfully
      */
-    bool setIntegrationTime(tsl2561IntegrationTime_t integration);
+    bool setIntegrationTime(const String& integrationStr);
 
 private:
     /**
@@ -180,32 +228,84 @@ private:
     bool validateReadings(float lux, uint16_t broadband, uint16_t infrared) const;
     
     /**
-     * @brief Convert gain enum to string
-     * @param gain Gain setting
+     * @brief Convert gain register value to string
+     * @param gain Gain register value (0x00 or 0x10)
      * @return Gain as string
      */
-    String gainToString(tsl2561Gain_t gain) const;
+    String gainToString(uint8_t gain) const;
     
     /**
-     * @brief Convert integration time enum to string
-     * @param integration Integration time setting
+     * @brief Convert integration time register value to string
+     * @param integration Integration time register value
      * @return Integration time as string
      */
-    String integrationToString(tsl2561IntegrationTime_t integration) const;
+    String integrationToString(uint8_t integration) const;
     
     /**
      * @brief Parse gain from string
-     * @param gainStr Gain string
-     * @return Gain enum value
+     * @param gainStr Gain string ("1x" or "16x")
+     * @return Gain register value
      */
-    tsl2561Gain_t parseGain(const String& gainStr) const;
+    uint8_t parseGain(const String& gainStr) const;
     
     /**
      * @brief Parse integration time from string
      * @param integrationStr Integration time string
-     * @return Integration time enum value
+     * @return Integration time register value
      */
-    tsl2561IntegrationTime_t parseIntegrationTime(const String& integrationStr) const;
+    uint8_t parseIntegrationTime(const String& integrationStr) const;
+    
+    /**
+     * @brief Read from remote light sensor via HTTP (using shared Orchestrator service)
+     * @return true if reading successful
+     */
+    bool performRemoteReading();
+    
+    /**
+     * @brief Parse remote sensor JSON response
+     * @param jsonStr JSON response from remote sensor
+     * @return true if parsing successful
+     */
+    bool parseRemoteResponse(const String& jsonStr);
+    
+    /**
+     * @brief Parse remote sensor JSON response from JsonDocument
+     * @param doc Parsed JSON document from remote sensor
+     * @return true if parsing successful
+     */
+    bool parseRemoteResponse(const JsonDocument& doc);
+    
+    // === Direct I2C Methods ===
+    
+    /**
+     * @brief Write byte to TSL2561 register
+     * @param reg Register address
+     * @param value Value to write
+     * @return true if write successful
+     */
+    bool writeRegister(uint8_t reg, uint8_t value);
+    
+    /**
+     * @brief Read byte from TSL2561 register
+     * @param reg Register address
+     * @return Register value or 0xFF on error
+     */
+    uint8_t readRegister(uint8_t reg);
+    
+    /**
+     * @brief Read 16-bit value from TSL2561 register pair
+     * @param reg Low register address
+     * @return 16-bit value or 0xFFFF on error
+     */
+    uint16_t readRegister16(uint8_t reg);
+    
+    /**
+     * @brief Calculate lux from raw channel data
+     * @param ch0 Broadband channel (visible + IR)
+     * @param ch1 Infrared channel
+     * @return Calculated lux value
+     */
+    float calculateLux(uint16_t ch0, uint16_t ch1) const;
 };
 
 #endif // TSL2561_COMPONENT_H

@@ -10,7 +10,7 @@
 #   -h, --help       Show this help message
 
 set -e
-PROJECT_DIR="/home/edt/ccode/esp32-modular-controller"
+PROJECT_DIR="/home/edt/ccode/esp32/BaseLine-B"
 ESP32_PORT="/dev/ttyUSB0"
 LOGS_DIR="$PROJECT_DIR/runtime-logs"
 ENV_FILE="$PROJECT_DIR/.env"

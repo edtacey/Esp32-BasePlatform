@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "system_id": "esp32-orchestrator",
+  "name": "ESP32 IoT Orchestrator",
+  "description": "Baseline ESP32 IoT system with component orchestration"
+}

@@ -99,13 +99,29 @@ ExecutionResult ECProbeComponent::execute() {
     // Update sensor mode based on current state
     updateSensorMode();
     
-    // Initialize sampling window if not active
-    if (!m_samplingActive) {
-        startSamplingWindow();
+    // For mock mode, use simplified direct reading
+    if (m_currentMode == ECProbeMode::MOCK) {
+        // Take a direct reading for mock mode
+        float rawVoltage = readRawVoltage();
+        if (rawVoltage >= 0) {
+            m_currentVolts = rawVoltage;
+            m_currentTemp = getTemperatureReading();
+            m_currentEC = convertVoltageToEC(m_currentVolts, m_currentTemp);
+            m_currentTDS = convertECtoTDS(m_currentEC);
+            m_totalReadings++;
+            
+            log(Logger::DEBUG, "EC Mock reading: " + String(rawVoltage, 4) + "V -> " + 
+                String(m_currentEC, 1) + " µS/cm, " + String(m_currentTDS, 1) + " ppm");
+        }
+    } else {
+        // Initialize sampling window if not active
+        if (!m_samplingActive) {
+            startSamplingWindow();
+        }
     }
     
-    // Take readings during the sampling window
-    if (m_samplingActive && !isSamplingWindowComplete()) {
+    // Take readings during the sampling window (only for non-mock mode)
+    if (m_currentMode != ECProbeMode::MOCK && m_samplingActive && !isSamplingWindowComplete()) {
         // Ensure excitation voltage is stabilized before taking readings
         if (isExcitationStabilized()) {
             // Check if it's time for a new reading
@@ -130,8 +146,8 @@ ExecutionResult ECProbeComponent::execute() {
         }
     }
     
-    // Process samples when window is complete
-    if (m_samplingActive && isSamplingWindowComplete()) {
+    // Process samples when window is complete (only for non-mock mode)
+    if (m_currentMode != ECProbeMode::MOCK && m_samplingActive && isSamplingWindowComplete()) {
         endSamplingWindow();
         
         // Remove outliers from sample set
@@ -210,6 +226,14 @@ ExecutionResult ECProbeComponent::execute() {
     // Calculate next execution time based on sampling window state
     uint32_t nextExecutionTime = calculateNextExecutionTime();
     setNextExecutionMs(nextExecutionTime);
+    
+    // CRITICAL: Update execution statistics
+    updateExecutionStats();
+    
+    // Store last execution data for API/dashboard access
+    String dataStr;
+    serializeJson(data, dataStr);
+    storeExecutionDataString(dataStr);
     
     result.success = true;
     result.data = data;
@@ -578,6 +602,11 @@ float ECProbeComponent::calculateWeightedAverage() const {
 float ECProbeComponent::calculateWeightedAverageWithOutlierRemoval() {
     if (m_lastReads.empty()) return 0.0f;
     
+    // If only one reading, return it directly
+    if (m_lastReads.size() == 1) {
+        return m_lastReads[0];
+    }
+    
     // Create a copy for outlier removal without affecting original data
     std::vector<float> cleanedReads = m_lastReads;
     
@@ -753,6 +782,24 @@ uint32_t ECProbeComponent::calculateNextExecutionTime() const {
 }
 
 float ECProbeComponent::convertVoltageToEC(float voltage, float temperature_c) const {
+    // In mock mode, provide simulated EC values without calibration
+    if (m_currentMode == ECProbeMode::MOCK) {
+        // Simulate EC around 400 µS/cm with variations based on voltage
+        float baseEC = 400.0f;
+        float voltageDeviation = voltage - 1.2f;
+        float ec = baseEC + (voltageDeviation * 500.0f);
+        
+        // Apply temperature compensation
+        float tempCompensation = 1.0f + (m_tempCoefficient / 100.0f) * (temperature_c - 25.0f);
+        ec = ec / tempCompensation;
+        
+        // Ensure reasonable range
+        if (ec < 0.0f) ec = 0.0f;
+        if (ec > 5000.0f) ec = 5000.0f;
+        
+        return ec;
+    }
+    
     if (!isCalibrated()) return -1.0f;
     
     // Basic linear interpolation between calibration points

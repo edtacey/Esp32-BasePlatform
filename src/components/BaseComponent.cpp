@@ -83,21 +83,15 @@ bool BaseComponent::loadConfiguration(const JsonDocument& config) {
 }
 
 bool BaseComponent::validateConfiguration(const JsonDocument& config) {
-    // Basic validation - check for required fields from schema
-    if (m_schema["required"].is<JsonArray>()) {
-        JsonArray required = m_schema["required"];
-        for (JsonVariant requiredField : required) {
-            String fieldName = requiredField.as<String>();
-            if (config[fieldName].isNull()) {
-                setError("Missing required field: " + fieldName);
-                return false;
-            }
-        }
-    }
+    // With default hydration architecture, no fields are truly "required"
+    // since applyConfig() provides defaults for all missing values
+    // 
+    // Future validation logic could include:
+    // - Range validation (e.g., port numbers 1-65535)
+    // - Format validation (e.g., valid IP addresses)
+    // - Logical validation (e.g., start_time < end_time)
     
-    // Additional validation can be added here
-    // For now, we do basic validation
-    
+    log(Logger::DEBUG, "Configuration validation passed (using default hydration)");
     return true;
 }
 
@@ -127,6 +121,11 @@ String BaseComponent::getStateString(ComponentState state) const {
 }
 
 bool BaseComponent::isReadyToExecute() const {
+    // Force execution if never executed and component is ready
+    if (m_state == ComponentState::READY && m_executionCount == 0) {
+        return true;
+    }
+    
     return (m_state == ComponentState::READY) && 
            (millis() >= m_nextExecutionMs);
 }
@@ -144,13 +143,19 @@ JsonDocument BaseComponent::getStatistics() const {
     stats["componentId"] = m_componentId;
     stats["componentType"] = m_componentType;
     stats["state"] = getStateString();
-    stats["executionCount"] = m_executionCount;
-    stats["errorCount"] = m_errorCount;
-    stats["lastExecutionMs"] = m_lastExecutionMs;
+    stats["execution_count"] = m_executionCount;
+    stats["error_count"] = m_errorCount;
+    stats["last_execution_ms"] = m_lastExecutionMs;
     stats["nextExecutionMs"] = m_nextExecutionMs;
     stats["uptime"] = millis();
     
     return stats;
+}
+
+JsonDocument BaseComponent::getCoreData() const {
+    // Default implementation returns last execution data
+    // Derived classes should override this to return only essential sensor values
+    return m_lastData;
 }
 
 void BaseComponent::setError(const String& error) {
@@ -278,4 +283,306 @@ bool BaseComponent::requestScheduleUpdate(const String& componentId, uint32_t ti
     
     log(Logger::DEBUG, String("Requesting schedule update for ") + componentId + " to wake at " + timeToWakeUp + "ms");
     return m_orchestrator->updateNextCheck(componentId, timeToWakeUp);
+}
+
+// === Enhanced Configuration Persistence Implementation ===
+
+bool BaseComponent::saveCurrentConfiguration() {
+    log(Logger::INFO, "💾 Saving current configuration to persistent storage");
+    
+    try {
+        // Ask child class for its complete current state
+        JsonDocument currentConfig = getCurrentConfig();
+        
+        if (currentConfig.isNull() || currentConfig.size() == 0) {
+            log(Logger::WARNING, "⚠️ Child class returned empty configuration");
+            return false;
+        }
+        
+        // Add component metadata for persistence
+        currentConfig["component_type"] = m_componentType;
+        currentConfig["component_name"] = m_componentName;
+        
+        // Enhanced logging of the configuration being saved
+        String configStr;
+        serializeJson(currentConfig, configStr);
+        log(Logger::INFO, "📝 Saving config to storage: " + configStr);
+        
+        // Base class handles the storage operation
+        bool success = m_storage.saveComponentConfig(m_componentId, currentConfig);
+        
+        if (success) {
+            log(Logger::INFO, "✅ Configuration saved successfully to LittleFS");
+        } else {
+            log(Logger::ERROR, "❌ Failed to save configuration to LittleFS");
+        }
+        
+        return success;
+        
+    } catch (...) {
+        log(Logger::ERROR, "Exception during configuration save");
+        return false;
+    }
+}
+
+bool BaseComponent::loadStoredConfiguration() {
+    log(Logger::INFO, "Loading configuration from persistent storage");
+    
+    try {
+        JsonDocument storedConfig;
+        
+        // Base class handles the storage operation
+        bool hasStoredConfig = m_storage.loadComponentConfig(m_componentId, storedConfig);
+        
+        if (hasStoredConfig) {
+            // Debug log what was loaded
+            String configStr;
+            serializeJson(storedConfig, configStr);
+            log(Logger::INFO, "🔄 Loaded stored config from persistence: " + configStr);
+            
+            // Ask child class to apply the loaded configuration
+            bool applied = applyConfig(storedConfig);
+            
+            if (applied) {
+                log(Logger::INFO, "✅ Stored configuration applied successfully");
+                
+                // Get current config to verify what was actually applied
+                JsonDocument appliedConfig = getCurrentConfig();
+                String appliedStr;
+                serializeJson(appliedConfig, appliedStr);
+                log(Logger::INFO, "🔍 Applied config verification: " + appliedStr);
+                
+                // Only save if the applied config is significantly different from stored
+                // This prevents overriding stored configs with defaults
+                if (appliedConfig.size() > storedConfig.size()) {
+                    log(Logger::INFO, "💾 Saving expanded configuration (added missing defaults)");
+                    saveCurrentConfiguration();
+                } else {
+                    log(Logger::INFO, "✅ Configuration matches stored - no save needed");
+                }
+                
+            } else {
+                log(Logger::ERROR, "❌ Failed to apply stored configuration");
+                return false;
+            }
+            
+        } else {
+            log(Logger::INFO, "🆕 No stored configuration found, applying defaults");
+            
+            // No stored config - ask child to apply defaults
+            JsonDocument emptyConfig;
+            bool applied = applyConfig(emptyConfig);
+            
+            if (applied) {
+                // Get the applied defaults for verification
+                JsonDocument defaultConfig = getCurrentConfig();
+                String defaultStr;
+                serializeJson(defaultConfig, defaultStr);
+                log(Logger::INFO, "🔍 Applied default config: " + defaultStr);
+                
+                // Save the default configuration for future use
+                log(Logger::INFO, "💾 Default configuration applied, saving to storage");
+                saveCurrentConfiguration();
+            } else {
+                log(Logger::ERROR, "❌ Failed to apply default configuration");
+                return false;
+            }
+        }
+        
+        return true;
+        
+    } catch (...) {
+        log(Logger::ERROR, "Exception during configuration load");
+        return false;
+    }
+}
+
+// === Component Action System Implementation ===
+
+ActionResult BaseComponent::executeAction(const String& actionName, const JsonDocument& parameters) {
+    ActionResult result;
+    result.actionName = actionName;
+    uint32_t startTime = millis();
+    
+    log(Logger::INFO, String("Executing action: ") + actionName);
+    
+    // Get supported actions from child class
+    std::vector<ComponentAction> actions = getSupportedActions();
+    ComponentAction* targetAction = nullptr;
+    
+    // Find the requested action
+    for (auto& action : actions) {
+        if (action.name == actionName) {
+            targetAction = &action;
+            break;
+        }
+    }
+    
+    if (!targetAction) {
+        result.success = false;
+        result.message = "Action not supported: " + actionName;
+        log(Logger::ERROR, result.message);
+        return result;
+    }
+    
+    // Check component state requirements
+    if (targetAction->requiresReady && m_state != ComponentState::READY) {
+        result.success = false;
+        result.message = String("Component not ready for action. Current state: ") + getStateString();
+        log(Logger::WARNING, result.message);
+        return result;
+    }
+    
+    // Validate parameters
+    if (!validateActionParameters(*targetAction, parameters)) {
+        result.success = false;
+        result.message = "Invalid parameters for action: " + actionName;
+        log(Logger::ERROR, result.message);
+        return result;
+    }
+    
+    // Set component state to executing
+    ComponentState originalState = m_state;
+    setState(ComponentState::EXECUTING);
+    
+    try {
+        // Execute the action in the child class
+        result = performAction(actionName, parameters);
+        
+        result.executionTimeMs = millis() - startTime;
+        
+        if (result.success) {
+            log(Logger::INFO, String("Action completed successfully: ") + actionName + 
+                             " (" + result.executionTimeMs + "ms)");
+        } else {
+            log(Logger::ERROR, String("Action failed: ") + actionName + " - " + result.message);
+        }
+        
+    } catch (...) {
+        result.success = false;
+        result.message = "Exception during action execution";
+        result.executionTimeMs = millis() - startTime;
+        log(Logger::ERROR, result.message);
+    }
+    
+    // Restore component state
+    setState(originalState);
+    
+    return result;
+}
+
+bool BaseComponent::validateActionParameters(const ComponentAction& action, const JsonDocument& parameters) {
+    log(Logger::DEBUG, String("Validating parameters for action: ") + action.name);
+    
+    // Check each required parameter
+    for (const ActionParameter& param : action.parameters) {
+        if (param.required && !parameters[param.name].is<JsonVariant>()) {
+            log(Logger::ERROR, String("Missing required parameter: ") + param.name);
+            return false;
+        }
+        
+        if (parameters[param.name].isNull() && param.required) {
+            log(Logger::ERROR, String("Required parameter is null: ") + param.name);
+            return false;
+        }
+        
+        if (!parameters[param.name].isNull()) {
+            // Validate parameter type and constraints
+            if (!validateParameterValue(param, parameters[param.name])) {
+                return false;
+            }
+        }
+    }
+    
+    log(Logger::DEBUG, "Parameter validation successful");
+    return true;
+}
+
+bool BaseComponent::validateParameterValue(const ActionParameter& param, JsonVariantConst value) {
+    switch (param.type) {
+        case ActionParameterType::INTEGER:
+            if (!value.is<int>()) {
+                log(Logger::ERROR, String("Parameter ") + param.name + " must be an integer");
+                return false;
+            }
+            if (param.minValue != param.maxValue) {
+                int intVal = value.as<int>();
+                if (intVal < param.minValue || intVal > param.maxValue) {
+                    log(Logger::ERROR, String("Parameter ") + param.name + " out of range: " + 
+                                       intVal + " (allowed: " + param.minValue + "-" + param.maxValue + ")");
+                    return false;
+                }
+            }
+            break;
+            
+        case ActionParameterType::FLOAT:
+            if (!value.is<float>()) {
+                log(Logger::ERROR, String("Parameter ") + param.name + " must be a float");
+                return false;
+            }
+            if (param.minValue != param.maxValue) {
+                float floatVal = value.as<float>();
+                if (floatVal < param.minValue || floatVal > param.maxValue) {
+                    log(Logger::ERROR, String("Parameter ") + param.name + " out of range: " + 
+                                       floatVal + " (allowed: " + param.minValue + "-" + param.maxValue + ")");
+                    return false;
+                }
+            }
+            break;
+            
+        case ActionParameterType::STRING:
+            if (!value.is<const char*>()) {
+                log(Logger::ERROR, String("Parameter ") + param.name + " must be a string");
+                return false;
+            }
+            if (param.maxLength > 0) {
+                String strVal = value.as<String>();
+                if (strVal.length() > param.maxLength) {
+                    log(Logger::ERROR, String("Parameter ") + param.name + " too long: " + 
+                                       strVal.length() + " chars (max: " + param.maxLength + ")");
+                    return false;
+                }
+            }
+            break;
+            
+        case ActionParameterType::BOOLEAN:
+            if (!value.is<bool>()) {
+                log(Logger::ERROR, String("Parameter ") + param.name + " must be a boolean");
+                return false;
+            }
+            break;
+            
+        case ActionParameterType::ARRAY:
+            if (!value.is<JsonArray>()) {
+                log(Logger::ERROR, String("Parameter ") + param.name + " must be an array");
+                return false;
+            }
+            break;
+            
+        case ActionParameterType::OBJECT:
+            if (!value.is<JsonObject>()) {
+                log(Logger::ERROR, String("Parameter ") + param.name + " must be an object");
+                return false;
+            }
+            break;
+    }
+    
+    return true;
+}
+
+JsonDocument BaseComponent::fetchRemoteData(const String& url, uint32_t timeoutMs) {
+    JsonDocument result;
+    
+    // Delegate to orchestrator if available
+    if (m_orchestrator) {
+        log(Logger::DEBUG, "Delegating fetchRemoteData to Orchestrator: " + url);
+        return m_orchestrator->fetchRemoteData(url, timeoutMs);
+    }
+    
+    // Fallback if no orchestrator
+    result["error"] = "No orchestrator available for remote fetch";
+    log(Logger::ERROR, "fetchRemoteData called but no orchestrator available");
+    result["success"] = false;
+    
+    return result;
 }

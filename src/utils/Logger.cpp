@@ -65,6 +65,11 @@ void Logger::critical(const char* component, const String& message) {
 }
 
 void Logger::log(Level level, const char* component, const String& message) {
+    // Compile-time optimization: skip debug/info logs in production
+    #ifdef NDEBUG
+        if (level < WARNING) return;  // Only log WARNING and above in production
+    #endif
+    
     // Check if we should log this level
     if (level < s_currentLevel) {
         return;

@@ -84,26 +84,33 @@ bool TestHPeristalticComponent::initialize(const JsonDocument& config) {
     return true;
 }
 
-bool TestHPeristalticComponent::applyConfiguration(const JsonDocument& config) {
-    log(Logger::DEBUG, "Applying multi-pump test harness configuration");
+
+JsonDocument TestHPeristalticComponent::getCurrentConfig() const {
+    JsonDocument config;
     
-    // Extract dose volume range
-    if (config["minDoseVolume"].is<float>()) {
-        m_minDoseVolume = config["minDoseVolume"].as<float>();
-    }
+    config["minDoseVolume"] = m_minDoseVolume;
+    config["maxDoseVolume"] = m_maxDoseVolume;
+    config["doseFreqSec"] = m_doseFreqSec;
+    config["randomDosing"] = m_randomDosing;
+    config["config_version"] = 1;
     
-    if (config["maxDoseVolume"].is<float>()) {
-        m_maxDoseVolume = config["maxDoseVolume"].as<float>();
-    }
+    return config;
+}
+
+bool TestHPeristalticComponent::applyConfig(const JsonDocument& config) {
+    log(Logger::DEBUG, "Applying multi-pump test harness configuration with default hydration");
     
-    // Extract dose frequency
-    if (config["doseFreqSec"].is<uint32_t>()) {
-        m_doseFreqSec = config["doseFreqSec"].as<uint32_t>();
-    }
+    // Apply configuration with default hydration
+    m_minDoseVolume = config["minDoseVolume"] | 0.5f;
+    m_maxDoseVolume = config["maxDoseVolume"] | 5.0f;
+    m_doseFreqSec = config["doseFreqSec"] | 30;
+    m_randomDosing = config["randomDosing"] | true;
     
-    // Extract random dosing mode
-    if (config["randomDosing"].is<bool>()) {
-        m_randomDosing = config["randomDosing"].as<bool>();
+    // Handle version migration if needed
+    uint16_t configVersion = config["config_version"] | 1;
+    if (configVersion < 1) {
+        log(Logger::INFO, "Migrating TestHarness configuration to version 1");
+        // Future migration logic would go here
     }
     
     log(Logger::DEBUG, String("Config applied: minDose=") + m_minDoseVolume + "ml" +
@@ -112,6 +119,11 @@ bool TestHPeristalticComponent::applyConfiguration(const JsonDocument& config) {
                        ", random=" + (m_randomDosing ? "enabled" : "disabled"));
     
     return true;
+}
+
+bool TestHPeristalticComponent::applyConfiguration(const JsonDocument& config) {
+    // Legacy method - now delegates to new architecture
+    return applyConfig(config);
 }
 
 ExecutionResult TestHPeristalticComponent::execute() {
@@ -394,4 +406,16 @@ void TestHPeristalticComponent::cleanup() {
     if (m_testRunning) {
         stopTest();
     }
+}
+
+std::vector<ComponentAction> TestHPeristalticComponent::getSupportedActions() const {
+    std::vector<ComponentAction> actions;
+    return actions;
+}
+
+ActionResult TestHPeristalticComponent::performAction(const String& actionName, const JsonDocument& parameters) {
+    ActionResult result;
+    result.success = false;
+    result.message = "Action not implemented: " + actionName;
+    return result;
 }

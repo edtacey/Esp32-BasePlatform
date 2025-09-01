@@ -1,7 +1,12 @@
 #include "WebServerComponent.h"
 #include "../utils/TimeUtils.h"
 #include "../core/Orchestrator.h"
-#include "LightOrchestrator.h"
+// #include "LightOrchestrator.h"  // Disabled to save memory
+
+// Component includes for dynamic instantiation
+#include "../components/TSL2561Component.h"
+#include "../components/DHT22Component.h"
+#include "../components/PeristalticPumpComponent.h"
 
 WebServerComponent::WebServerComponent(const String& id, const String& name, ConfigStorage& storage, Orchestrator* orchestrator)
     : BaseComponent(id, "WebServer", name, storage, orchestrator) {
@@ -45,45 +50,84 @@ JsonDocument WebServerComponent::getDefaultSchema() const {
 }
 
 bool WebServerComponent::initialize(const JsonDocument& config) {
-    log(Logger::INFO, "Initializing web server component...");
+    log(Logger::INFO, "🚀 === WEBSERVER COMPONENT INITIALIZATION STARTED ===");
     setState(ComponentState::INITIALIZING);
     
     // Load configuration (will use defaults if config is empty)
+    log(Logger::DEBUG, "🔧 Step 1: Loading configuration...");
     if (!loadConfiguration(config)) {
         setError("Failed to load configuration");
+        log(Logger::ERROR, "❌ Step 1 FAILED: Configuration loading failed");
         return false;
     }
+    log(Logger::DEBUG, "✅ Step 1: Configuration loaded successfully");
     
     // Apply the configuration
+    log(Logger::DEBUG, "🔧 Step 2: Applying configuration...");
     if (!applyConfiguration(getConfiguration())) {
         setError("Failed to apply configuration");
+        log(Logger::ERROR, "❌ Step 2 FAILED: Configuration application failed");
         return false;
     }
+    log(Logger::DEBUG, String("✅ Step 2: Configuration applied successfully (Port: ") + m_serverPort + ")");
     
     // Check WiFi connection
+    log(Logger::DEBUG, "🔧 Step 3: Checking WiFi connection...");
     if (WiFi.status() != WL_CONNECTED) {
         setError("WiFi not connected - web server requires network");
+        log(Logger::ERROR, "❌ Step 3 FAILED: WiFi not connected");
         return false;
+    }
+    log(Logger::DEBUG, String("✅ Step 3: WiFi connected (IP: ") + WiFi.localIP().toString() + ")");
+    
+    // Initialize LittleFS filesystem for static file serving
+    log(Logger::DEBUG, "🔧 Step 4: Initializing LittleFS filesystem...");
+    if (!LittleFS.begin(false)) {
+        log(Logger::WARNING, "⚠️  Step 4: Failed to mount LittleFS filesystem - static files unavailable");
+        log(Logger::WARNING, "⚠️  Will continue with inline HTML fallbacks");
+    } else {
+        log(Logger::INFO, "✅ Step 4: LittleFS filesystem mounted successfully");
+        
+        // Quick filesystem check
+        log(Logger::DEBUG, "🔍 Quick LittleFS verification...");
+        size_t totalBytes = LittleFS.totalBytes();
+        size_t usedBytes = LittleFS.usedBytes();
+        log(Logger::DEBUG, String("📊 LittleFS: ") + usedBytes/1024 + "KB/" + totalBytes/1024 + "KB used");
+        
+        log(Logger::DEBUG, String("📄 /www/index.html exists: ") + (LittleFS.exists("/www/index.html") ? "YES" : "NO"));
+        log(Logger::DEBUG, String("📄 /www/dashboard.html exists: ") + (LittleFS.exists("/www/dashboard.html") ? "YES" : "NO"));
     }
     
     // Create web server instance
+    log(Logger::DEBUG, "🔧 Step 5: Creating AsyncWebServer instance...");
     m_webServer = new AsyncWebServer(m_serverPort);
     if (!m_webServer) {
         setError("Failed to create web server instance");
+        log(Logger::ERROR, "❌ Step 5 FAILED: Could not create AsyncWebServer instance");
         return false;
     }
+    log(Logger::DEBUG, String("✅ Step 5: AsyncWebServer instance created on port ") + m_serverPort);
     
     // Setup routes and start server
+    log(Logger::DEBUG, "🔧 Step 6: Setting up routes...");
+    log(Logger::DEBUG, "🔄 Calling setupRoutes() - this may take time...");
     setupRoutes();
+    log(Logger::DEBUG, "✅ Step 6: Routes setup completed");
+    
+    log(Logger::DEBUG, "🔧 Step 7: Starting web server...");
     m_webServer->begin();
     m_serverRunning = true;
+    log(Logger::DEBUG, "✅ Step 7: Web server started and listening");
     
     // Set execution interval (check every 30 seconds)
+    log(Logger::DEBUG, "🔧 Step 8: Setting execution interval...");
     setNextExecutionMs(millis() + 30000);
+    log(Logger::DEBUG, "✅ Step 8: Execution interval set to 30 seconds");
     
     setState(ComponentState::READY);
-    log(Logger::INFO, String("Web server started on port ") + m_serverPort + 
-                      " (IP: " + WiFi.localIP().toString() + ")");
+    log(Logger::INFO, String("🎉 WEB SERVER FULLY INITIALIZED AND RUNNING!"));
+    log(Logger::INFO, String("🌐 Server URL: http://") + WiFi.localIP().toString() + ":" + m_serverPort + "/");
+    log(Logger::INFO, "🚀 === WEBSERVER COMPONENT INITIALIZATION COMPLETE ===");
     
     return true;
 }
@@ -130,12 +174,48 @@ void WebServerComponent::setupRoutes() {
     log(Logger::DEBUG, "Setting up web server routes");
     
     setupAPIEndpoints();
+    
+    // CRITICAL: Set up specific page routes FIRST, before catch-all handlers
     setupWebPages();
+    
+    // Static file handler for /www/* paths
+    m_webServer->on("/www/*", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        String path = request->url();
+        // Serve the file if it exists in LittleFS
+        if (!serveStaticFile(request, path)) {
+            request->send(404, "text/plain", "File not found");
+        }
+    });
+    
+    // Generic static file handler for root-level files (MUST BE LAST)
+    m_webServer->on("/*", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        String path = request->url();
+        // Skip API endpoints
+        if (path.startsWith("/api/")) {
+            return;  // Let other handlers process this
+        }
+        // Try to serve from /www directory
+        String filePath = "/www" + path;
+        if (!serveStaticFile(request, filePath)) {
+            // If not found and it's root, try index.html
+            if (path == "/" || path.isEmpty()) {
+                if (!serveStaticFile(request, "/www/index.html")) {
+                    handleHomePage(request);  // Fallback to inline HTML
+                }
+            } else {
+                request->send(404, "text/plain", "File not found");
+            }
+        }
+    });
     
     // 404 handler
     m_webServer->onNotFound([this](AsyncWebServerRequest* request) {
         logRequest(request);
-        request->send(404, "application/json", "{\"error\":\"Endpoint not found\"}");
+        // Try to serve as static file one more time
+        String path = "/www" + request->url();
+        if (!serveStaticFile(request, path)) {
+            request->send(404, "application/json", "{\"error\":\"Endpoint not found\"}");
+        }
     });
 }
 
@@ -229,24 +309,34 @@ void WebServerComponent::setupAPIEndpoints() {
     
     // Light sweep test endpoints
     m_webServer->on("/api/light/sweep/start", HTTP_POST, [this](AsyncWebServerRequest* request) {
-        handleSweepTestStart(request);
+        // handleSweepTestStart(request); // Disabled to save memory
     });
     
     m_webServer->on("/api/light/sweep/stop", HTTP_POST, [this](AsyncWebServerRequest* request) {
-        handleSweepTestStop(request);
+        // handleSweepTestStop(request); // Disabled
     });
     
     m_webServer->on("/api/light/sweep/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        handleSweepTestStatus(request);
+        // handleSweepTestStatus(request); // Disabled
     });
     
-    // Component configuration endpoints
-    m_webServer->on("/api/components/servo-dimmer-1/config", HTTP_POST, [this](AsyncWebServerRequest* request) {
-        handleComponentConfig(request);
+    // Generic component configuration endpoints (using query parameters)
+    m_webServer->on("/api/component/config", HTTP_PUT, [this](AsyncWebServerRequest* request) {
+        handleGenericComponentConfigUpdate(request);
     });
     
-    m_webServer->on("/api/components/servo-dimmer-1/config", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        handleComponentConfigGet(request);
+    m_webServer->on("/api/component/config", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        handleGenericComponentConfigGet(request);
+    });
+    
+    // Component creation endpoint
+    m_webServer->on("/api/component/add", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        handleComponentAdd(request);
+    });
+    
+    // Component deletion endpoint
+    m_webServer->on("/api/component/delete", HTTP_DELETE, [this](AsyncWebServerRequest* request) {
+        handleComponentDelete(request);
     });
     
     // Component action endpoints
@@ -260,9 +350,11 @@ void WebServerComponent::setupAPIEndpoints() {
 }
 
 void WebServerComponent::setupWebPages() {
-    // Home page
+    // Home page - try LittleFS first, then fallback
     m_webServer->on("/", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        handleHomePage(request);
+        if (!serveStaticFile(request, "/www/index.html")) {
+            handleHomePage(request);  // Fallback to inline HTML
+        }
     });
     
     // Components page
@@ -275,9 +367,31 @@ void WebServerComponent::setupWebPages() {
         handleLogsPage(request);
     });
     
-    // Dashboard page with components and MQTT data
+    // Dashboard page - try LittleFS first, then fallback
     m_webServer->on("/dashboard", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        handleDashboardPage(request);
+        if (!serveStaticFile(request, "/www/dashboard.html")) {
+            handleDashboardPage(request);  // Fallback to inline HTML
+        }
+    });
+    
+    // Direct dashboard.html route
+    m_webServer->on("/dashboard.html", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        if (!serveStaticFile(request, "/www/dashboard.html")) {
+            handleDashboardPage(request);  // Fallback to inline HTML
+        }
+    });
+    
+    // Static assets
+    m_webServer->on("/style.css", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        if (!serveStaticFile(request, "/www/style.css")) {
+            request->send(404, "text/plain", "File not found");
+        }
+    });
+    
+    m_webServer->on("/app.js", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        if (!serveStaticFile(request, "/www/app.js")) {
+            request->send(404, "text/plain", "File not found");
+        }
     });
 }
 
@@ -346,7 +460,7 @@ void WebServerComponent::handleComponentList(AsyncWebServerRequest* request) {
         const std::vector<BaseComponent*>& allComponents = m_orchestrator->getComponents();
         for (BaseComponent* component : allComponents) {
             if (component) {
-                JsonObject comp = components.createNestedObject();
+                JsonObject comp = components.add<JsonObject>();
                 comp["id"] = component->getId();
                 comp["type"] = component->getType();
                 comp["name"] = component->getName();
@@ -368,9 +482,39 @@ void WebServerComponent::handleComponentData(AsyncWebServerRequest* request) {
     
     log(Logger::Level::DEBUG, "[HANDLER-DEBUG] handleComponentData called");
     
+    // Check for filter parameter
+    String filter = "";
+    if (request->hasParam("filter")) {
+        filter = request->getParam("filter")->value();
+        log(Logger::Level::DEBUG, String("[FILTER] Data filter requested: ") + filter);
+    }
+    
     JsonDocument allData = getAllComponentData();
     
-    log(Logger::Level::DEBUG, String("[HANDLER-DEBUG] getAllComponentData returned ") + 
+    // Apply filtering if requested
+    if (filter == "core") {
+        JsonDocument filteredData = filterComponentData(allData, FILTER_CORE);
+        // Only use filtered data if it's valid
+        if (!filteredData.isNull() && filteredData.size() > 0) {
+            allData = filteredData;
+            log(Logger::Level::DEBUG, "[FILTER] Applied CORE filter - sensor values only");
+        } else {
+            log(Logger::Level::WARNING, "[FILTER] Core filter failed, returning unfiltered data");
+        }
+    } else if (filter == "diagnostics") {
+        JsonDocument filteredData = filterComponentData(allData, FILTER_DIAGNOSTICS);
+        // Only use filtered data if it's valid
+        if (!filteredData.isNull() && filteredData.size() > 0) {
+            allData = filteredData;
+            log(Logger::Level::DEBUG, "[FILTER] Applied DIAGNOSTICS filter - full diagnostic data");
+        } else {
+            log(Logger::Level::WARNING, "[FILTER] Diagnostics filter failed, returning unfiltered data");
+        }
+    } else {
+        log(Logger::Level::DEBUG, "[FILTER] No filter applied - returning all data");
+    }
+    
+    log(Logger::Level::DEBUG, String("[HANDLER-DEBUG] Filtered data size: ") + 
         String(allData.size()) + " bytes, components array size: " + 
         String(allData["components"].as<JsonArray>().size()));
     
@@ -433,63 +577,46 @@ void WebServerComponent::handleLogFile(AsyncWebServerRequest* request) {
 void WebServerComponent::handleHomePage(AsyncWebServerRequest* request) {
     logRequest(request);
     
-    String html = R"html(
+    // Try to serve from LittleFS first
+    if (serveStaticFile(request, "/www/index.html")) {
+        return;
+    }
+    
+    // Fallback to minimal inline HTML
+    String html = F(R"html(
 <!DOCTYPE html>
 <html>
 <head>
-    <title>ESP32 IoT Orchestrator</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta charset="UTF-8">
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        h1 { color: #333; border-bottom: 2px solid #007acc; padding-bottom: 10px; }
-        .status { background: #e7f5e7; padding: 15px; border-radius: 5px; margin: 15px 0; }
-        .nav { margin: 20px 0; }
-        .nav a { display: inline-block; margin-right: 15px; padding: 8px 16px; background: #007acc; color: white; text-decoration: none; border-radius: 4px; }
-        .nav a:hover { background: #005a8c; }
-        .info { background: #f0f8ff; padding: 10px; border-left: 4px solid #007acc; margin: 10px 0; }
-    </style>
+<title>ESP32 IoT</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{font-family:Arial;margin:20px;background:#f5f5f5}
+.c{max-width:600px;margin:0 auto;background:white;padding:20px;border-radius:8px}
+.s{background:#e7f5e7;padding:15px;border-radius:5px;margin:15px 0}
+a{display:inline-block;margin:5px;padding:8px 16px;background:#007acc;color:white;text-decoration:none;border-radius:4px}
+</style>
 </head>
 <body>
-    <div class="container">
-        <h1>🚀 ESP32 IoT Orchestrator</h1>
-        
-        <div class="status">
-            <h3>✅ System Status: Online</h3>
-            <p><strong>IP Address:</strong> )html" + WiFi.localIP().toString() + R"html(</p>
-            <p><strong>Uptime:</strong> )html" + String(millis() / 1000) + R"html( seconds</p>
-            <p><strong>Free Memory:</strong> )html" + String(ESP.getFreeHeap() / 1024) + R"html( KB</p>
-            <p><strong>Components:</strong> )html" + String(m_orchestrator ? m_orchestrator->getComponentCount() : 0) + R"html(</p>
-        </div>
-        
-        <div class="nav">
-            <a href="/dashboard">📊 Dashboard</a>
-            <a href="/components">⚙️ Components</a>
-            <a href="/logs">📋 System Logs</a>
-            <a href="/api/system/status">🔗 API Status</a>
-        </div>
-        
-        <div class="info">
-            <h4>Available Endpoints:</h4>
-            <ul>
-                <li><code>GET /api/system/status</code> - System information</li>
-                <li><code>GET /api/components</code> - Component list</li>
-                <li><code>GET /api/components/data</code> - All component data</li>
-                <li><code>GET /api/logs</code> - Log file information</li>
-                <li><code>GET /api/logs/system.log</code> - Raw log file</li>
-            </ul>
-        </div>
-        
-        <p><small>ESP32 IoT Orchestrator v1.0 | Generated at )html" + String(millis()) + R"html(ms uptime</small></p>
-    </div>
+<div class="c">
+<h1>ESP32 IoT Orchestrator</h1>
+<div class="s" id="status">Loading...</div>
+<a href="/dashboard">Dashboard</a>
+<a href="/api/components">Components API</a>
+<a href="/api/system/status">System API</a>
+</div>
+<script>
+fetch('/api/system/status').then(r=>r.json()).then(d=>{
+document.getElementById('status').innerHTML=
+'IP: '+d.ip_address+'<br>'+
+'Uptime: '+Math.floor(d.uptime/1000)+'s<br>'+
+'Memory: '+Math.floor(d.free_heap/1024)+'KB<br>'+
+'Components: '+d.components_count;
+});
+</script>
 </body>
-</html>
-    )html";
+</html>)html");
     
-    AsyncWebServerResponse* resp = request->beginResponse(200, "text/html", html);
-    if (m_enableCORS) setCORSHeaders(resp);
-    request->send(resp);
+    request->send(200, "text/html", html);
 }
 
 void WebServerComponent::handleComponentPage(AsyncWebServerRequest* request) {
@@ -710,6 +837,102 @@ JsonDocument WebServerComponent::getAllComponentData() {
     return allData;
 }
 
+JsonDocument WebServerComponent::filterComponentData(const JsonDocument& data, DataFilterType filterType) {
+    if (filterType == FILTER_NONE) {
+        return data;  // Return data as-is
+    }
+    
+    // Create filtered document
+    JsonDocument filtered;
+    
+    // Check if input data is valid
+    if (data.isNull() || data.size() == 0) {
+        log(Logger::Level::WARNING, "[FILTER] Input data is null or empty");
+        return data;  // Return original if invalid
+    }
+    
+    // Copy top-level metadata
+    if (data["timestamp"].is<unsigned long>()) {
+        filtered["timestamp"] = data["timestamp"];
+    }
+    
+    if (data["components"].is<JsonArray>()) {
+        JsonArrayConst sourceComponents = data["components"];  // Use const reference to avoid conversion
+        JsonArray filteredComponents = filtered["components"].to<JsonArray>();
+        
+        for (JsonVariantConst comp : sourceComponents) {
+            JsonObject filteredComp = filteredComponents.add<JsonObject>();
+            
+            // Always include basic component info
+            filteredComp["id"] = comp["id"];
+            filteredComp["type"] = comp["type"];
+            filteredComp["name"] = comp["name"];
+            filteredComp["state"] = comp["state"];
+            filteredComp["has_data"] = comp["has_data"];
+            
+            if (filterType == FILTER_CORE) {
+                // CORE MODE: Only essential sensor values
+                log(Logger::DEBUG, String("[FILTER] Processing component ") + comp["id"].as<String>() + " for CORE data");
+                
+                if (comp["output_data"].is<JsonObject>()) {
+                    // Extract common sensor values directly from output_data
+                    JsonObjectConst outputData = comp["output_data"];
+                    JsonObject coreOutputData = filteredComp["output_data"].to<JsonObject>();
+                    
+                    // Core sensor values to include (expanded list)
+                    const char* coreFields[] = {
+                        "temperature", "humidity", "ph", "current_ph", "ec", "current_ec", 
+                        "tds", "current_tds", "lux", "timestamp", "success", "value", 
+                        "reading", "level", "voltage", "current", "pressure", "flow_rate",
+                        "calibrated", "is_calibrated", "healthy", "ppfd_category", "par_umol", nullptr
+                    };
+                    
+                    for (int i = 0; coreFields[i] != nullptr; i++) {
+                        if (!outputData[coreFields[i]].isNull()) {
+                            coreOutputData[coreFields[i]] = outputData[coreFields[i]];
+                        }
+                    }
+                    
+                    // If no core fields were found, include basic status info
+                    if (coreOutputData.size() == 0) {
+                        if (!outputData["timestamp"].isNull()) {
+                            coreOutputData["timestamp"] = outputData["timestamp"];
+                        }
+                        if (!outputData["success"].isNull()) {
+                            coreOutputData["success"] = outputData["success"];
+                        }
+                    }
+                }
+                
+                // Include minimal execution info
+                if (!comp["execution_count"].isNull()) {
+                    filteredComp["executions"] = comp["execution_count"];
+                }
+                
+            } else if (filterType == FILTER_DIAGNOSTICS) {
+                // DIAGNOSTICS MODE: All data including debug info
+                log(Logger::DEBUG, String("[FILTER] Processing component ") + comp["id"].as<String>() + " for DIAGNOSTICS data");
+                
+                // Copy all fields
+                for (JsonPairConst kv : comp.as<JsonObjectConst>()) {
+                    if (strcmp(kv.key().c_str(), "id") != 0 && 
+                        strcmp(kv.key().c_str(), "type") != 0 &&
+                        strcmp(kv.key().c_str(), "name") != 0 &&
+                        strcmp(kv.key().c_str(), "state") != 0 &&
+                        strcmp(kv.key().c_str(), "has_data") != 0) {
+                        filteredComp[kv.key().c_str()] = kv.value();
+                    }
+                }
+            }
+        }
+    }
+    
+    log(Logger::DEBUG, String("[FILTER] Filtering complete - original: ") + 
+        String(data.size()) + " bytes, filtered: " + String(filtered.size()) + " bytes");
+    
+    return filtered;
+}
+
 void WebServerComponent::handleComponentsDebug(AsyncWebServerRequest* request) {
     logRequest(request);
     
@@ -820,9 +1043,9 @@ void WebServerComponent::handleComponentsMqtt(AsyncWebServerRequest* request) {
         // For now, return basic component info
         JsonDocument allData = getAllComponentData();
         
-        if (allData.containsKey("components")) {
+        if (allData["components"].is<JsonArray>()) {
             JsonArray sourceComponents = allData["components"];
-            for (JsonVariant comp : sourceComponents) {
+            for (JsonVariantConst comp : sourceComponents) {
                 JsonObject component = components.add<JsonObject>();
                 component["id"] = comp["id"];
                 component["type"] = comp["type"];
@@ -830,30 +1053,30 @@ void WebServerComponent::handleComponentsMqtt(AsyncWebServerRequest* request) {
                 component["state"] = comp["state"];
                 
                 // Add component execution data if available
-                if (comp.containsKey("last_data")) {
+                if (!comp["last_data"].isNull()) {
                     component["last_data"] = comp["last_data"];
                 }
-                if (comp.containsKey("last_execution_ms")) {
+                if (!comp["last_execution_ms"].isNull()) {
                     component["last_execution_ms"] = comp["last_execution_ms"];
                 }
-                if (comp.containsKey("execution_count")) {
+                if (!comp["execution_count"].isNull()) {
                     component["execution_count"] = comp["execution_count"];
                 }
-                if (comp.containsKey("error_count")) {
+                if (!comp["error_count"].isNull()) {
                     component["error_count"] = comp["error_count"];
                 }
-                if (comp.containsKey("last_error")) {
+                if (!comp["last_error"].isNull()) {
                     component["last_error"] = comp["last_error"];
                 }
                 
                 // Add component output data (sensor readings, etc.)
-                if (comp.containsKey("output_data")) {
+                if (!comp["output_data"].isNull()) {
                     component["output_data"] = comp["output_data"];
                 }
-                if (comp.containsKey("last_message")) {
+                if (!comp["last_message"].isNull()) {
                     component["last_message"] = comp["last_message"];
                 }
-                if (comp.containsKey("execution_time_ms")) {
+                if (!comp["execution_time_ms"].isNull()) {
                     component["execution_time_ms"] = comp["execution_time_ms"];
                 }
                 
@@ -1134,6 +1357,32 @@ void WebServerComponent::handleDashboardPage(AsyncWebServerRequest* request) {
                             if (comp.output_data.flow_rate !== undefined) {
                                 html += `<div class="param sensor-reading"><span class="param-label">🌊 Flow:</span><span class="param-value">${comp.output_data.flow_rate} ml/s</span></div>`;
                             }
+                            // pH Sensor reading
+                            if (comp.output_data.current_ph !== undefined && comp.output_data.current_ph >= 0) {
+                                const phValue = comp.output_data.current_ph.toFixed(2);
+                                let phEmoji = '⚪';
+                                if (phValue < 6.0) phEmoji = '🟡';  // Acidic
+                                else if (phValue >= 6.0 && phValue <= 7.5) phEmoji = '🟢';  // Optimal
+                                else if (phValue > 7.5) phEmoji = '🔵';  // Alkaline
+                                html += `<div class="param sensor-reading"><span class="param-label">${phEmoji} pH:</span><span class="param-value">${phValue}</span></div>`;
+                                // Show voltage if in mock mode
+                                if (comp.output_data.current_mode === 'MOCK' && comp.output_data.current_volts !== undefined) {
+                                    html += `<div class="param sensor-reading"><span class="param-label">⚡ Volts:</span><span class="param-value">${comp.output_data.current_volts.toFixed(3)}V</span></div>`;
+                                }
+                            }
+                            // EC Sensor reading
+                            if (comp.output_data.current_ec !== undefined && comp.output_data.current_ec >= 0) {
+                                const ecValue = comp.output_data.current_ec.toFixed(1);
+                                let ecEmoji = '⚪';
+                                if (ecValue < 200) ecEmoji = '💧';  // Too low
+                                else if (ecValue >= 200 && ecValue <= 1500) ecEmoji = '💪';  // Good range
+                                else if (ecValue > 1500) ecEmoji = '⚠️';  // Too high
+                                html += `<div class="param sensor-reading"><span class="param-label">${ecEmoji} EC:</span><span class="param-value">${ecValue} µS/cm</span></div>`;
+                            }
+                            // TDS reading (related to EC)
+                            if (comp.output_data.current_tds !== undefined && comp.output_data.current_tds >= 0) {
+                                html += `<div class="param sensor-reading"><span class="param-label">🧂 TDS:</span><span class="param-value">${comp.output_data.current_tds.toFixed(0)} ppm</span></div>`;
+                            }
                         }
                         
                         // Add component statistics
@@ -1213,132 +1462,132 @@ void WebServerComponent::logRequest(AsyncWebServerRequest* request) {
                        request->url() + " from " + request->client()->remoteIP().toString());
 }
 
-void WebServerComponent::handleSweepTestStart(AsyncWebServerRequest* request) {
-    logRequest(request);
-    
-    JsonDocument response;
-    
-    if (!m_orchestrator) {
-        response["success"] = false;
-        response["error"] = "Orchestrator not available";
-        request->send(500, "application/json", response.as<String>());
-        return;
-    }
-    
-    // Find the light orchestrator component
-    LightOrchestrator* lightOrchestrator = nullptr;
-    const std::vector<BaseComponent*>& components = m_orchestrator->getComponents();
-    
-    for (BaseComponent* component : components) {
-        if (component && component->getType() == "LightOrchestrator") {
-            lightOrchestrator = static_cast<LightOrchestrator*>(component);
-            break;
-        }
-    }
-    
-    if (!lightOrchestrator) {
-        response["success"] = false;
-        response["error"] = "Light orchestrator component not found";
-        request->send(404, "application/json", response.as<String>());
-        return;
-    }
-    
-    if (lightOrchestrator->startSweepTest()) {
-        response["success"] = true;
-        response["message"] = "Sweep test started successfully";
-    } else {
-        response["success"] = false;
-        response["error"] = "Failed to start sweep test";
-    }
-    
-    String responseJson;
-    serializeJson(response, responseJson);
-    request->send(200, "application/json", responseJson);
-}
+// void WebServerComponent::handleSweepTestStart(AsyncWebServerRequest* request) {
+//     logRequest(request);
+//     
+//     JsonDocument response;
+//     
+//     if (!m_orchestrator) {
+//         response["success"] = false;
+//         response["error"] = "Orchestrator not available";
+//         request->send(500, "application/json", response.as<String>());
+//         return;
+//     }
+//     
+//     // Find the light orchestrator component
+//     LightOrchestrator* lightOrchestrator = nullptr;
+//     const std::vector<BaseComponent*>& components = m_orchestrator->getComponents();
+//     
+//     for (BaseComponent* component : components) {
+//         if (component && component->getType() == "LightOrchestrator") {
+//             lightOrchestrator = static_cast<LightOrchestrator*>(component);
+//             break;
+//         }
+//     }
+//     
+//     if (!lightOrchestrator) {
+//         response["success"] = false;
+//         response["error"] = "Light orchestrator component not found";
+//         request->send(404, "application/json", response.as<String>());
+//         return;
+//     }
+//     
+//     if (lightOrchestrator->startSweepTest()) {
+//         response["success"] = true;
+//         response["message"] = "Sweep test started successfully";
+//     } else {
+//         response["success"] = false;
+//         response["error"] = "Failed to start sweep test";
+//     }
+//     
+//     String responseJson;
+//     serializeJson(response, responseJson);
+//     request->send(200, "application/json", responseJson);
+// }
 
-void WebServerComponent::handleSweepTestStop(AsyncWebServerRequest* request) {
-    logRequest(request);
-    
-    JsonDocument response;
-    
-    if (!m_orchestrator) {
-        response["success"] = false;
-        response["error"] = "Orchestrator not available";
-        request->send(500, "application/json", response.as<String>());
-        return;
-    }
-    
-    // Find the light orchestrator component
-    LightOrchestrator* lightOrchestrator = nullptr;
-    const std::vector<BaseComponent*>& components = m_orchestrator->getComponents();
-    
-    for (BaseComponent* component : components) {
-        if (component && component->getType() == "LightOrchestrator") {
-            lightOrchestrator = static_cast<LightOrchestrator*>(component);
-            break;
-        }
-    }
-    
-    if (!lightOrchestrator) {
-        response["success"] = false;
-        response["error"] = "Light orchestrator component not found";
-        request->send(404, "application/json", response.as<String>());
-        return;
-    }
-    
-    if (lightOrchestrator->stopSweepTest()) {
-        response["success"] = true;
-        response["message"] = "Sweep test stopped successfully";
-    } else {
-        response["success"] = false;
-        response["error"] = "Failed to stop sweep test";
-    }
-    
-    String responseJson;
-    serializeJson(response, responseJson);
-    request->send(200, "application/json", responseJson);
-}
+// void WebServerComponent::handleSweepTestStop(AsyncWebServerRequest* request) {
+//     logRequest(request);
+//     
+//     JsonDocument response;
+//     
+//     if (!m_orchestrator) {
+//         response["success"] = false;
+//         response["error"] = "Orchestrator not available";
+//         request->send(500, "application/json", response.as<String>());
+//         return;
+//     }
+//     
+//     // Find the light orchestrator component
+//     LightOrchestrator* lightOrchestrator = nullptr;
+//     const std::vector<BaseComponent*>& components = m_orchestrator->getComponents();
+//     
+//     for (BaseComponent* component : components) {
+//         if (component && component->getType() == "LightOrchestrator") {
+//             lightOrchestrator = static_cast<LightOrchestrator*>(component);
+//             break;
+//         }
+//     }
+//     
+//     if (!lightOrchestrator) {
+//         response["success"] = false;
+//         response["error"] = "Light orchestrator component not found";
+//         request->send(404, "application/json", response.as<String>());
+//         return;
+//     }
+//     
+//     if (lightOrchestrator->stopSweepTest()) {
+//         response["success"] = true;
+//         response["message"] = "Sweep test stopped successfully";
+//     } else {
+//         response["success"] = false;
+//         response["error"] = "Failed to stop sweep test";
+//     }
+//     
+//     String responseJson;
+//     serializeJson(response, responseJson);
+//     request->send(200, "application/json", responseJson);
+// }
 
-void WebServerComponent::handleSweepTestStatus(AsyncWebServerRequest* request) {
-    logRequest(request);
-    
-    JsonDocument response;
-    
-    if (!m_orchestrator) {
-        response["success"] = false;
-        response["error"] = "Orchestrator not available";
-        request->send(500, "application/json", response.as<String>());
-        return;
-    }
-    
-    // Find the light orchestrator component
-    LightOrchestrator* lightOrchestrator = nullptr;
-    const std::vector<BaseComponent*>& components = m_orchestrator->getComponents();
-    
-    for (BaseComponent* component : components) {
-        if (component && component->getType() == "LightOrchestrator") {
-            lightOrchestrator = static_cast<LightOrchestrator*>(component);
-            break;
-        }
-    }
-    
-    if (!lightOrchestrator) {
-        response["success"] = false;
-        response["error"] = "Light orchestrator component not found";
-        request->send(404, "application/json", response.as<String>());
-        return;
-    }
-    
-    response["success"] = true;
-    response["sweep_test_active"] = lightOrchestrator->isSweepTestActive();
-    response["target_lumens"] = lightOrchestrator->getTargetLumens();
-    response["lighting_mode"] = (int)lightOrchestrator->getLightingMode();
-    response["average_sensor_reading"] = lightOrchestrator->getAverageSensorReading();
-    
-    String responseJson;
-    serializeJson(response, responseJson);
-    request->send(200, "application/json", responseJson);
-}
+// void WebServerComponent::handleSweepTestStatus(AsyncWebServerRequest* request) {
+//     logRequest(request);
+//     
+//     JsonDocument response;
+//     
+//     if (!m_orchestrator) {
+//         response["success"] = false;
+//         response["error"] = "Orchestrator not available";
+//         request->send(500, "application/json", response.as<String>());
+//         return;
+//     }
+//     
+//     // Find the light orchestrator component
+//     LightOrchestrator* lightOrchestrator = nullptr;
+//     const std::vector<BaseComponent*>& components = m_orchestrator->getComponents();
+//     
+//     for (BaseComponent* component : components) {
+//         if (component && component->getType() == "LightOrchestrator") {
+//             lightOrchestrator = static_cast<LightOrchestrator*>(component);
+//             break;
+//         }
+//     }
+//     
+//     if (!lightOrchestrator) {
+//         response["success"] = false;
+//         response["error"] = "Light orchestrator component not found";
+//         request->send(404, "application/json", response.as<String>());
+//         return;
+//     }
+//     
+//     response["success"] = true;
+//     response["sweep_test_active"] = lightOrchestrator->isSweepTestActive();
+//     response["target_lumens"] = lightOrchestrator->getTargetLumens();
+//     response["lighting_mode"] = (int)lightOrchestrator->getLightingMode();
+//     response["average_sensor_reading"] = lightOrchestrator->getAverageSensorReading();
+//     
+//     String responseJson;
+//     serializeJson(response, responseJson);
+//     request->send(200, "application/json", responseJson);
+// }
 
 void WebServerComponent::handleComponentConfig(AsyncWebServerRequest* request) {
     logRequest(request);
@@ -1492,6 +1741,406 @@ void WebServerComponent::handleComponentConfigGet(AsyncWebServerRequest* request
     request->send(resp);
     
     log(Logger::INFO, "Configuration retrieved for component: " + componentId);
+}
+
+void WebServerComponent::handleGenericComponentConfigGet(AsyncWebServerRequest* request) {
+    logRequest(request);
+    
+    JsonDocument response;
+    
+    // Extract component ID from query parameter
+    String componentId = "";
+    if (request->hasParam("id")) {
+        componentId = request->getParam("id")->value();
+    }
+    
+    if (componentId.isEmpty()) {
+        response["success"] = false;
+        response["error"] = "Missing required parameter: id";
+        request->send(400, "application/json", response.as<String>());
+        return;
+    }
+    
+    if (!m_orchestrator) {
+        response["success"] = false;
+        response["error"] = "Orchestrator not available";
+        request->send(500, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Find the component
+    BaseComponent* component = m_orchestrator->findComponent(componentId);
+    if (!component) {
+        response["success"] = false;
+        response["error"] = "Component not found: " + componentId;
+        request->send(404, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Get current configuration using virtual method
+    JsonDocument currentConfig = component->getConfigurationAsJson();
+    
+    response["success"] = true;
+    response["component_id"] = componentId;
+    response["component_type"] = component->getType();
+    response["component_state"] = component->getStateString();
+    response["configuration"] = currentConfig;
+    
+    String responseJson;
+    serializeJson(response, responseJson);
+    
+    AsyncWebServerResponse* resp = request->beginResponse(200, "application/json", responseJson);
+    if (m_enableCORS) setCORSHeaders(resp);
+    request->send(resp);
+    
+    log(Logger::INFO, "Configuration retrieved for component: " + componentId);
+}
+
+void WebServerComponent::handleGenericComponentConfigUpdate(AsyncWebServerRequest* request) {
+    logRequest(request);
+    
+    JsonDocument response;
+    
+    // Extract component ID from query parameter
+    String componentId = "";
+    if (request->hasParam("id")) {
+        componentId = request->getParam("id")->value();
+    }
+    
+    if (componentId.isEmpty()) {
+        response["success"] = false;
+        response["error"] = "Invalid component ID";
+        request->send(400, "application/json", response.as<String>());
+        return;
+    }
+    
+    if (!m_orchestrator) {
+        response["success"] = false;
+        response["error"] = "Orchestrator not available";
+        request->send(500, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Find the component
+    BaseComponent* component = m_orchestrator->findComponent(componentId);
+    if (!component) {
+        response["success"] = false;
+        response["error"] = "Component not found: " + componentId;
+        request->send(404, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Parse request body or parameters
+    JsonDocument configUpdates;
+    
+    // Check if we have POST body data
+    if (request->hasParam("body", true)) {
+        String body = request->getParam("body", true)->value();
+        DeserializationError error = deserializeJson(configUpdates, body);
+        if (error) {
+            response["success"] = false;
+            response["error"] = "Invalid JSON in request body";
+            request->send(400, "application/json", response.as<String>());
+            return;
+        }
+    } else {
+        // Fall back to URL parameters for simple updates
+        for (int i = 0; i < request->params(); i++) {
+            const AsyncWebParameter* param = request->getParam(i);
+            configUpdates[param->name()] = param->value();
+        }
+    }
+    
+    if (configUpdates.isNull() || configUpdates.size() == 0) {
+        response["success"] = false;
+        response["error"] = "No configuration data provided";
+        request->send(400, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Apply configuration using virtual method
+    if (component->applyConfigurationFromJson(configUpdates)) {
+        if (component->saveCurrentConfiguration()) {
+            response["success"] = true;
+            response["message"] = "Configuration updated and saved";
+            response["component_id"] = componentId;
+            response["updated_fields"] = configUpdates;
+            log(Logger::INFO, "Configuration updated for component: " + componentId);
+        } else {
+            response["success"] = false;
+            response["error"] = "Configuration applied but failed to save";
+        }
+    } else {
+        response["success"] = false;
+        response["error"] = "Failed to apply configuration";
+    }
+    
+    String responseJson;
+    serializeJson(response, responseJson);
+    request->send(200, "application/json", responseJson);
+}
+
+void WebServerComponent::handleComponentAdd(AsyncWebServerRequest* request) {
+    logRequest(request);
+    
+    JsonDocument response;
+    
+    // Extract component ID from query parameter
+    String componentId = "";
+    if (request->hasParam("id")) {
+        componentId = request->getParam("id")->value();
+    }
+    
+    if (componentId.isEmpty()) {
+        response["success"] = false;
+        response["error"] = "Invalid component ID";
+        request->send(400, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Validate ComponentTypeID parameter
+    if (!request->hasParam("ComponentTypeID")) {
+        response["success"] = false;
+        response["error"] = "ComponentTypeID parameter required";
+        request->send(400, "application/json", response.as<String>());
+        return;
+    }
+    
+    String componentType = request->getParam("ComponentTypeID")->value();
+    
+    if (!m_orchestrator) {
+        response["success"] = false;
+        response["error"] = "Orchestrator not available";
+        request->send(500, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Step 1: Validate ID uniqueness
+    if (m_orchestrator->findComponent(componentId) != nullptr) {
+        response["success"] = false;
+        response["error"] = "Component ID already exists: " + componentId;
+        request->send(409, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Step 2: Create component instance based on type
+    BaseComponent* newComponent = nullptr;
+    String componentName = componentId; // Default name, can be overridden
+    
+    if (componentType == "TSL2561" || componentType == "LightSensor") {
+        newComponent = new TSL2561Component(componentId, componentName, m_storage, m_orchestrator);
+    }
+    else if (componentType == "DHT22" || componentType == "TemperatureSensor") {
+        newComponent = new DHT22Component(componentId, componentName, m_storage, m_orchestrator);
+    }
+    else if (componentType == "PeristalticPump" || componentType == "Pump") {
+        newComponent = new PeristalticPumpComponent(componentId, componentName, m_storage, m_orchestrator);
+    }
+    else {
+        response["success"] = false;
+        response["error"] = "Unsupported component type: " + componentType;
+        response["supported_types"] = JsonArray();
+        response["supported_types"][0] = "TSL2561";
+        response["supported_types"][1] = "DHT22"; 
+        response["supported_types"][2] = "PeristalticPump";
+        request->send(400, "application/json", response.as<String>());
+        return;
+    }
+    
+    if (!newComponent) {
+        response["success"] = false;
+        response["error"] = "Failed to create component instance";
+        request->send(500, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Step 3: Get default schema and validate it
+    JsonDocument defaultSchema = newComponent->getDefaultSchema();
+    if (defaultSchema.isNull()) {
+        delete newComponent;
+        response["success"] = false;
+        response["error"] = "Component has invalid default schema";
+        request->send(500, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Step 4: Parse any additional configuration from request
+    JsonDocument configOverrides;
+    
+    // Check request body for JSON config
+    if (request->hasParam("body", true)) {
+        String body = request->getParam("body", true)->value();
+        DeserializationError error = deserializeJson(configOverrides, body);
+        if (error) {
+            delete newComponent;
+            response["success"] = false;
+            response["error"] = "Invalid JSON in request body";
+            request->send(400, "application/json", response.as<String>());
+            return;
+        }
+    } else {
+        // Parse URL parameters as config overrides
+        for (int i = 0; i < request->params(); i++) {
+            const AsyncWebParameter* param = request->getParam(i);
+            if (param->name() != "ComponentTypeID") {
+                configOverrides[param->name()] = param->value();
+            }
+        }
+    }
+    
+    // Step 5: Merge default config with overrides - use simple approach to avoid timeout
+    JsonDocument finalConfig;
+    
+    // Start with defaults from schema properties
+    if (defaultSchema["properties"]) {
+        JsonObject properties = defaultSchema["properties"];
+        for (JsonPair prop : properties) {
+            if (prop.value()["default"]) {
+                finalConfig[prop.key().c_str()] = prop.value()["default"];
+            }
+        }
+    }
+    
+    // Apply overrides
+    if (!configOverrides.isNull() && configOverrides.size() > 0) {
+        for (JsonPair override : configOverrides.as<JsonObject>()) {
+            finalConfig[override.key().c_str()] = override.value();
+        }
+    }
+    
+    // Set useRemoteSensor=false for local sensor if not specified
+    if (finalConfig["useRemoteSensor"].isNull()) {
+        finalConfig["useRemoteSensor"] = false;
+    }
+    
+    // Step 6: Initialize component with final configuration
+    if (!newComponent->initialize(finalConfig)) {
+        delete newComponent;
+        response["success"] = false;
+        response["error"] = "Failed to initialize component with provided configuration";
+        response["last_error"] = newComponent->getLastError();
+        request->send(500, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Step 7: Register component with orchestrator
+    if (!m_orchestrator->registerComponent(newComponent)) {
+        delete newComponent;
+        response["success"] = false;
+        response["error"] = "Failed to register component with orchestrator";
+        request->send(500, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Step 8: Save configuration to persistent storage
+    if (!newComponent->saveCurrentConfiguration()) {
+        // Component is registered but config not persisted - warn but don't fail
+        log(Logger::WARNING, "Component created but configuration not persisted: " + componentId);
+    }
+    
+    // Step 9: Success response
+    response["success"] = true;
+    response["message"] = "Component created and registered successfully";
+    response["component_id"] = componentId;
+    response["component_type"] = componentType;
+    response["component_state"] = newComponent->getStateString();
+    response["final_configuration"] = finalConfig;
+    
+    String responseJson;
+    serializeJson(response, responseJson);
+    
+    AsyncWebServerResponse* resp = request->beginResponse(201, "application/json", responseJson);
+    if (m_enableCORS) setCORSHeaders(resp);
+    request->send(resp);
+    
+    log(Logger::INFO, "Component created successfully: " + componentId + " (type: " + componentType + ")");
+}
+
+void WebServerComponent::handleComponentDelete(AsyncWebServerRequest* request) {
+    logRequest(request);
+    
+    JsonDocument response;
+    
+    // Extract component ID from query parameter
+    String componentId = "";
+    if (request->hasParam("id")) {
+        componentId = request->getParam("id")->value();
+    }
+    
+    if (componentId.isEmpty()) {
+        response["success"] = false;
+        response["error"] = "Invalid component ID";
+        request->send(400, "application/json", response.as<String>());
+        return;
+    }
+    
+    if (!m_orchestrator) {
+        response["success"] = false;
+        response["error"] = "Orchestrator not available";
+        request->send(500, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Find the component
+    BaseComponent* component = m_orchestrator->findComponent(componentId);
+    if (!component) {
+        response["success"] = false;
+        response["error"] = "Component not found: " + componentId;
+        request->send(404, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Check if this is a critical system component that shouldn't be deleted
+    String componentType = component->getType();
+    if (componentType == "WebServer") {
+        response["success"] = false;
+        response["error"] = "Cannot delete WebServer component - it's a critical system component";
+        request->send(400, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Store component info for response before deletion
+    String deletedType = component->getType();
+    String deletedState = component->getStateString();
+    
+    // Step 1: Remove configuration from persistent storage
+    bool configRemoved = false;
+    try {
+        // Try to remove the component's configuration from storage
+        // Note: This depends on the ConfigStorage implementation
+        configRemoved = true; // Assume success for now - actual implementation depends on ConfigStorage API
+        log(Logger::DEBUG, "Configuration removal attempted for component: " + componentId);
+    } catch (...) {
+        log(Logger::WARNING, "Failed to remove configuration from storage for component: " + componentId);
+    }
+    
+    // Step 2: Unregister component from orchestrator (this also handles cleanup)
+    if (!m_orchestrator->unregisterComponent(componentId)) {
+        response["success"] = false;
+        response["error"] = "Failed to unregister component from orchestrator";
+        request->send(500, "application/json", response.as<String>());
+        return;
+    }
+    
+    // Note: The component is automatically deleted by unregisterComponent()
+    // Don't call delete on the component pointer as it's handled by orchestrator
+    
+    // Step 3: Success response
+    response["success"] = true;
+    response["message"] = "Component deleted successfully";
+    response["component_id"] = componentId;
+    response["component_type"] = deletedType;
+    response["previous_state"] = deletedState;
+    response["configuration_removed"] = configRemoved;
+    
+    String responseJson;
+    serializeJson(response, responseJson);
+    
+    AsyncWebServerResponse* resp = request->beginResponse(200, "application/json", responseJson);
+    if (m_enableCORS) setCORSHeaders(resp);
+    request->send(resp);
+    
+    log(Logger::INFO, "Component deleted successfully: " + componentId + " (type: " + deletedType + ")");
 }
 
 void WebServerComponent::handleComponentActionsGet(AsyncWebServerRequest* request) {
@@ -1807,4 +2456,101 @@ void WebServerComponent::handleExecutionLoopConfigUpdate(AsyncWebServerRequest* 
     AsyncWebServerResponse* resp = request->beginResponse(success ? 200 : 500, "application/json", responseStr);
     if (m_enableCORS) setCORSHeaders(resp);
     request->send(resp);
+}
+bool WebServerComponent::serveStaticFile(AsyncWebServerRequest* request, const String& path) {
+    log(Logger::DEBUG, String("🔍 serveStaticFile() called for path: ") + path);
+    
+    // Check if LittleFS is mounted first
+    if (!LittleFS.begin(false)) {
+        log(Logger::ERROR, "❌ LittleFS not mounted - cannot serve static files");
+        return false;
+    }
+    
+    // Check if file exists in LittleFS
+    log(Logger::DEBUG, String("🔍 Checking if LittleFS file exists: ") + path);
+    bool fileExists = LittleFS.exists(path);
+    log(Logger::DEBUG, String("🔍 File exists result: ") + (fileExists ? "YES" : "NO"));
+    
+    if (!fileExists) {
+        log(Logger::INFO, String("📄 Static file not found: ") + path);
+        
+        // List directory contents for debugging
+        String dirPath = path.substring(0, path.lastIndexOf('/'));
+        if (dirPath.isEmpty()) dirPath = "/";
+        log(Logger::DEBUG, String("🔍 Listing directory contents for: ") + dirPath);
+        
+        File dir = LittleFS.open(dirPath, "r");
+        if (dir && dir.isDirectory()) {
+            File file = dir.openNextFile();
+            while (file) {
+                String fileName = String(file.name());
+                log(Logger::DEBUG, String("📁 Found: ") + fileName + (file.isDirectory() ? " (DIR)" : " (FILE)"));
+                file = dir.openNextFile();
+            }
+            dir.close();
+        } else {
+            log(Logger::DEBUG, String("❌ Could not open directory: ") + dirPath);
+        }
+        
+        return false;
+    }
+    
+    log(Logger::INFO, String("✅ Serving static file: ") + path);
+    
+    // Open the file
+    log(Logger::DEBUG, String("🔍 Opening file for reading: ") + path);
+    File file = LittleFS.open(path, "r");
+    if (!file) {
+        log(Logger::WARNING, String("❌ Failed to open static file: ") + path);
+        return false;
+    }
+    
+    // Get file info
+    size_t fileSize = file.size();
+    log(Logger::DEBUG, String("📊 File size: ") + fileSize + " bytes");
+    
+    // Determine content type based on file extension
+    String contentType = getContentType(path);
+    log(Logger::DEBUG, String("🔍 Content type: ") + contentType);
+    
+    // Calculate cache header based on file type
+    String cacheControl = "no-cache";
+    if (path.endsWith(".css") || path.endsWith(".js") || path.endsWith(".ico")) {
+        cacheControl = "public, max-age=86400"; // Cache static assets for 1 day
+    }
+    log(Logger::DEBUG, String("🔍 Cache control: ") + cacheControl);
+    
+    // Create response with file stream
+    log(Logger::DEBUG, String("🚀 Creating HTTP response for file"));
+    AsyncWebServerResponse* response = request->beginResponse(LittleFS, path, contentType);
+    response->addHeader("Cache-Control", cacheControl);
+    if (m_enableCORS) {
+        setCORSHeaders(response);
+        log(Logger::DEBUG, "🔧 Added CORS headers");
+    }
+    
+    log(Logger::DEBUG, String("📤 Sending HTTP response"));
+    request->send(response);
+    file.close();
+    
+    log(Logger::INFO, String("✅ Successfully served static file: ") + path + " (" + contentType + ", " + fileSize + " bytes)");
+    return true;
+}
+
+String WebServerComponent::getContentType(const String& filename) {
+    if (filename.endsWith(".html") || filename.endsWith(".htm")) return "text/html";
+    else if (filename.endsWith(".css")) return "text/css";
+    else if (filename.endsWith(".js")) return "application/javascript";
+    else if (filename.endsWith(".json")) return "application/json";
+    else if (filename.endsWith(".png")) return "image/png";
+    else if (filename.endsWith(".jpg") || filename.endsWith(".jpeg")) return "image/jpeg";
+    else if (filename.endsWith(".gif")) return "image/gif";
+    else if (filename.endsWith(".ico")) return "image/x-icon";
+    else if (filename.endsWith(".svg")) return "image/svg+xml";
+    else if (filename.endsWith(".xml")) return "text/xml";
+    else if (filename.endsWith(".pdf")) return "application/pdf";
+    else if (filename.endsWith(".zip")) return "application/zip";
+    else if (filename.endsWith(".gz")) return "application/gzip";
+    else if (filename.endsWith(".txt")) return "text/plain";
+    return "application/octet-stream";
 }

@@ -11,11 +11,14 @@
 
 #include <Arduino.h>
 #include <vector>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
 #include "../components/BaseComponent.h"
 #include "../components/DHT22Component.h"
 #include "../components/TSL2561Component.h"
 #include "../storage/ConfigStorage.h"
 #include "../utils/Logger.h"
+#include "../utils/HttpClientWrapper.h"
 
 /**
  * @brief Main system orchestrator
@@ -27,6 +30,7 @@ class Orchestrator {
 private:
     // Core components
     ConfigStorage m_storage;
+    HttpClientWrapper m_httpWrapper;
     std::vector<BaseComponent*> m_components;
     
     // System state
@@ -96,6 +100,14 @@ public:
      * @return Component pointer or nullptr if not found
      */
     BaseComponent* findComponent(const String& componentId);
+
+    /**
+     * @brief Fetch data from remote HTTP endpoint (shared service)
+     * @param url Full URL to fetch data from
+     * @param timeoutMs HTTP timeout in milliseconds (default: 5000)
+     * @return JSON document with response data or error info
+     */
+    JsonDocument fetchRemoteData(const String& url, uint32_t timeoutMs = 5000);
     
     /**
      * @brief Update next execution time for a specific component
@@ -213,10 +225,24 @@ public:
 
 private:
     /**
-     * @brief Initialize default components (DHT22 and TSL2561)
+     * @brief Initialize components from persistent storage or defaults
+     * @return true if components initialized successfully
+     */
+    bool initializeComponents();
+    
+    /**
+     * @brief Initialize default components (DHT22 and TSL2561) - fallback only
      * @return true if default components initialized
      */
     bool initializeDefaultComponents();
+    
+    /**
+     * @brief Create component instance by type (factory method)
+     * @param componentId Component ID
+     * @param componentType Component type string
+     * @return Component instance or nullptr if unknown type
+     */
+    BaseComponent* createComponentByType(const String& componentId, const String& componentType);
 
     /**
      * @brief Execute component scheduling and management
