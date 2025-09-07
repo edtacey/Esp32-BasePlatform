@@ -85,6 +85,29 @@ void Orchestrator::loop() {
         m_lastSystemCheck = now;
     }
     
+    // Handle pending restart with countdown
+    if (m_restartPending) {
+        uint32_t elapsed = now - m_countdownStartTime;
+        uint32_t remainingMs = (m_restartTime > now) ? (m_restartTime - now) : 0;
+        uint32_t remainingSeconds = (remainingMs + 999) / 1000;  // Round up
+        
+        // Display countdown every second
+        static uint32_t lastCountdownDisplay = 0;
+        if (now - lastCountdownDisplay >= 1000) {
+            if (remainingSeconds > 0) {
+                log(Logger::INFO, String("System restart in ") + remainingSeconds + " seconds...");
+            }
+            lastCountdownDisplay = now;
+        }
+        
+        // Execute restart when time is up
+        if (now >= m_restartTime) {
+            log(Logger::INFO, "Restarting system now!");
+            delay(100);  // Brief delay to ensure message is sent
+            ESP.restart();
+        }
+    }
+    
     // Update statistics
     updateStatistics();
 }
@@ -404,90 +427,58 @@ BaseComponent* Orchestrator::createComponentByType(const String& componentId, co
 }
 
 bool Orchestrator::initializeDefaultComponents() {
-    log(Logger::INFO, "Initializing default components...");
+    log(Logger::INFO, "Initializing minimal default components (web server only)...");
     
     bool allSuccess = true;
     
-    // Initialize DHT22 sensor with default configuration (pin 15)
-    log(Logger::INFO, "Creating DHT22 temperature/humidity sensor...");
-    DHT22Component* dht = new DHT22Component("dht22-1", "Room Temperature/Humidity", m_storage, this);
-    
-    if (!dht->initialize(JsonDocument())) {  // Use default configuration
-        log(Logger::ERROR, "Failed to initialize DHT22 component");
-        delete dht;
-        allSuccess = false;
-    } else {
-        if (!registerComponent(dht)) {
-            log(Logger::ERROR, "Failed to register DHT22 component");
-            delete dht;
-            allSuccess = false;
-        }
-    }
+    // DHT22 sensor disabled - only creating web server for minimal defaults
+    // log(Logger::INFO, "Creating DHT22 temperature/humidity sensor...");
+    // DHT22Component* dht = new DHT22Component("dht22-1", "Room Temperature/Humidity", m_storage, this);
     
     // Local TSL2561 light sensor disabled to save flash memory
     // log(Logger::INFO, "Creating local TSL2561 light sensor...");
     // TSL2561Component* tslLocal = new TSL2561Component("tsl2561-local", "Local Light Sensor", m_storage, this);
     
-    // Initialize remote TSL2561 light sensor with HTTP
-    log(Logger::INFO, "Creating remote TSL2561 light sensor...");
-    TSL2561Component* tslRemote = new TSL2561Component("tsl2561-remote", "Remote Light Sensor", m_storage, this);
+    // TSL2561 sensor disabled - only creating web server for minimal defaults
+    // log(Logger::INFO, "Creating remote TSL2561 light sensor...");
+    // TSL2561Component* tslRemote = new TSL2561Component("tsl2561-remote", "Remote Light Sensor", m_storage, this);
     
-    JsonDocument remoteConfig;
-    remoteConfig["useRemoteSensor"] = true;
-    remoteConfig["remoteHost"] = "192.168.1.156";
-    remoteConfig["remotePort"] = 80;
-    remoteConfig["remotePath"] = "/light";
-    remoteConfig["httpTimeoutMs"] = 5000;
-    remoteConfig["samplingIntervalMs"] = 3000;  // Different interval
-    
-    if (!tslRemote->initialize(remoteConfig)) {
-        log(Logger::ERROR, "Failed to initialize remote TSL2561 component");
-        delete tslRemote;
-        allSuccess = false;
-    } else {
-        if (!registerComponent(tslRemote)) {
-            log(Logger::ERROR, "Failed to register remote TSL2561 component");
-            delete tslRemote;
-            allSuccess = false;
-        }
-    }
-    
-    // Initialize 8 Peristaltic Pumps with different GPIO pins and functions
-    struct PumpConfig {
-        String id;
-        String name;
-        String function;
-        uint8_t pin;
-    };
-    
-    PumpConfig pumpConfigs[1] = {
-        {"pump-1", "Nutrient-A", "Base nutrients", 26}
-    };
-    
-    for (int i = 0; i < 1; i++) {  // Single pump for debugging
-        log(Logger::INFO, String("Creating pump ") + (i+1) + ": " + pumpConfigs[i].name + " (" + pumpConfigs[i].function + ")");
-        PeristalticPumpComponent* pump = new PeristalticPumpComponent(pumpConfigs[i].id, pumpConfigs[i].name, m_storage, this);
-        
-        // Create custom config with specific GPIO pin
-        JsonDocument pumpConfig;
-        pumpConfig["pumpPin"] = pumpConfigs[i].pin;
-        pumpConfig["mlPerSecond"] = 40.0;  // Standard flow rate
-        pumpConfig["maxRuntimeMs"] = 60000; // 60 second safety timeout
-        
-        if (!pump->initialize(pumpConfig)) {
-            log(Logger::ERROR, String("Failed to initialize pump: ") + pumpConfigs[i].id);
-            delete pump;
-            allSuccess = false;
-        } else {
-            if (!registerComponent(pump)) {
-                log(Logger::ERROR, String("Failed to register pump: ") + pumpConfigs[i].id);
-                delete pump;
-                allSuccess = false;
-            } else {
-                log(Logger::INFO, String("Successfully registered pump: ") + pumpConfigs[i].id + " on GPIO" + pumpConfigs[i].pin);
-            }
-        }
-    }
+    // Pump components disabled - only creating web server for minimal defaults
+    // struct PumpConfig {
+    //     String id;
+    //     String name;
+    //     String function;
+    //     uint8_t pin;
+    // };
+    // 
+    // PumpConfig pumpConfigs[1] = {
+    //     {"pump-1", "Nutrient-A", "Base nutrients", 26}
+    // };
+    // 
+    // for (int i = 0; i < 1; i++) {  // Single pump for debugging
+    //     log(Logger::INFO, String("Creating pump ") + (i+1) + ": " + pumpConfigs[i].name + " (" + pumpConfigs[i].function + ")");
+    //     PeristalticPumpComponent* pump = new PeristalticPumpComponent(pumpConfigs[i].id, pumpConfigs[i].name, m_storage, this);
+    //     
+    //     // Create custom config with specific GPIO pin
+    //     JsonDocument pumpConfig;
+    //     pumpConfig["pumpPin"] = pumpConfigs[i].pin;
+    //     pumpConfig["mlPerSecond"] = 40.0;  // Standard flow rate
+    //     pumpConfig["maxRuntimeMs"] = 60000; // 60 second safety timeout
+    //     
+    //     if (!pump->initialize(pumpConfig)) {
+    //         log(Logger::ERROR, String("Failed to initialize pump: ") + pumpConfigs[i].id);
+    //         delete pump;
+    //         allSuccess = false;
+    //     } else {
+    //         if (!registerComponent(pump)) {
+    //             log(Logger::ERROR, String("Failed to register pump: ") + pumpConfigs[i].id);
+    //             delete pump;
+    //             allSuccess = false;
+    //         } else {
+    //             log(Logger::INFO, String("Successfully registered pump: ") + pumpConfigs[i].id + " on GPIO" + pumpConfigs[i].pin);
+    //         }
+    //     }
+    // }
     
     // Initialize Test Harness for pump testing - TEMPORARILY DISABLED TO SAVE FLASH MEMORY
     // log(Logger::INFO, "Creating pump test harness...");
@@ -557,70 +548,70 @@ bool Orchestrator::initializeDefaultComponents() {
     //     }
     // }
     
-    // Initialize pH Sensor Component (Mock Mode - GPIO 0)
-    log(Logger::INFO, "Creating pH sensor component in mock mode...");
-    PHSensorComponent* phSensor = new PHSensorComponent("ph-sensor-1", "pH Sensor (Mock)", m_storage, this);
+    // pH sensor disabled - only creating web server for minimal defaults
+    // log(Logger::INFO, "Creating pH sensor component in mock mode...");
+    // PHSensorComponent* phSensor = new PHSensorComponent("ph-sensor-1", "pH Sensor (Mock)", m_storage, this);
+    // 
+    // // Configure for mock mode (GPIO pin 0)
+    // JsonDocument phConfig;
+    // phConfig["gpio_pin"] = 0;  // Mock mode
+    // phConfig["temp_coefficient"] = 0.05992;
+    // phConfig["sample_size"] = 10;
+    // phConfig["adc_voltage_ref"] = 3.3;
+    // phConfig["adc_resolution"] = 4096;
+    // phConfig["reading_interval_ms"] = 500;
+    // phConfig["time_period_for_sampling"] = 10000;
+    // phConfig["outlier_threshold"] = 2.0;
+    // phConfig["temperature_source_id"] = "dht22-1";
+    // phConfig["excite_voltage_component_id"] = "";
+    // phConfig["excite_stabilize_ms"] = 500;
+    // 
+    // if (!phSensor->initialize(phConfig)) {
+    //     log(Logger::ERROR, "Failed to initialize pH sensor component");
+    //     delete phSensor;
+    //     allSuccess = false;
+    // } else {
+    //     if (!registerComponent(phSensor)) {
+    //         log(Logger::ERROR, "Failed to register pH sensor component");
+    //         delete phSensor;
+    //         allSuccess = false;
+    //     } else {
+    //         log(Logger::INFO, "Successfully registered pH sensor in mock mode");
+    //     }
+    // }
     
-    // Configure for mock mode (GPIO pin 0)
-    JsonDocument phConfig;
-    phConfig["gpio_pin"] = 0;  // Mock mode
-    phConfig["temp_coefficient"] = 0.05992;
-    phConfig["sample_size"] = 10;
-    phConfig["adc_voltage_ref"] = 3.3;
-    phConfig["adc_resolution"] = 4096;
-    phConfig["reading_interval_ms"] = 500;
-    phConfig["time_period_for_sampling"] = 10000;
-    phConfig["outlier_threshold"] = 2.0;
-    phConfig["temperature_source_id"] = "dht22-1";
-    phConfig["excite_voltage_component_id"] = "";
-    phConfig["excite_stabilize_ms"] = 500;
-    
-    if (!phSensor->initialize(phConfig)) {
-        log(Logger::ERROR, "Failed to initialize pH sensor component");
-        delete phSensor;
-        allSuccess = false;
-    } else {
-        if (!registerComponent(phSensor)) {
-            log(Logger::ERROR, "Failed to register pH sensor component");
-            delete phSensor;
-            allSuccess = false;
-        } else {
-            log(Logger::INFO, "Successfully registered pH sensor in mock mode");
-        }
-    }
-    
-    // Initialize EC Probe Component (Mock Mode - GPIO 0) 
-    log(Logger::INFO, "Creating EC probe component in mock mode...");
-    ECProbeComponent* ecProbe = new ECProbeComponent("ec-probe-1", "EC Probe (Mock)", m_storage, this);
-    
-    // Configure for mock mode (GPIO pin 0)
-    JsonDocument ecConfig;
-    ecConfig["gpio_pin"] = 0;  // Mock mode
-    ecConfig["temp_coefficient"] = 2.0;
-    ecConfig["sample_size"] = 15;
-    ecConfig["adc_voltage_ref"] = 3.3;
-    ecConfig["adc_resolution"] = 4096;
-    ecConfig["reading_interval_ms"] = 800;
-    ecConfig["time_period_for_sampling"] = 15000;
-    ecConfig["outlier_threshold"] = 2.5;
-    ecConfig["tds_conversion_factor"] = 0.64;
-    ecConfig["temperature_source_id"] = "dht22-1";
-    ecConfig["excite_voltage_component_id"] = "";
-    ecConfig["excite_stabilize_ms"] = 1000;
-    
-    if (!ecProbe->initialize(ecConfig)) {
-        log(Logger::ERROR, "Failed to initialize EC probe component");
-        delete ecProbe;
-        allSuccess = false;
-    } else {
-        if (!registerComponent(ecProbe)) {
-            log(Logger::ERROR, "Failed to register EC probe component");
-            delete ecProbe;
-            allSuccess = false;
-        } else {
-            log(Logger::INFO, "Successfully registered EC probe in mock mode");
-        }
-    }
+    // EC probe disabled - only creating web server for minimal defaults
+    // log(Logger::INFO, "Creating EC probe component in mock mode...");
+    // ECProbeComponent* ecProbe = new ECProbeComponent("ec-probe-1", "EC Probe (Mock)", m_storage, this);
+    // 
+    // // Configure for mock mode (GPIO pin 0)
+    // JsonDocument ecConfig;
+    // ecConfig["gpio_pin"] = 0;  // Mock mode
+    // ecConfig["temp_coefficient"] = 2.0;
+    // ecConfig["sample_size"] = 15;
+    // ecConfig["adc_voltage_ref"] = 3.3;
+    // ecConfig["adc_resolution"] = 4096;
+    // ecConfig["reading_interval_ms"] = 800;
+    // ecConfig["time_period_for_sampling"] = 15000;
+    // ecConfig["outlier_threshold"] = 2.5;
+    // ecConfig["tds_conversion_factor"] = 0.64;
+    // ecConfig["temperature_source_id"] = "dht22-1";
+    // ecConfig["excite_voltage_component_id"] = "";
+    // ecConfig["excite_stabilize_ms"] = 1000;
+    // 
+    // if (!ecProbe->initialize(ecConfig)) {
+    //     log(Logger::ERROR, "Failed to initialize EC probe component");
+    //     delete ecProbe;
+    //     allSuccess = false;
+    // } else {
+    //     if (!registerComponent(ecProbe)) {
+    //         log(Logger::ERROR, "Failed to register EC probe component");
+    //         delete ecProbe;
+    //         allSuccess = false;
+    //     } else {
+    //         log(Logger::INFO, "Successfully registered EC probe in mock mode");
+    //     }
+    // }
     
     if (allSuccess) {
         log(Logger::INFO, String("Default components initialized successfully (") + 
@@ -641,21 +632,41 @@ bool Orchestrator::initializeDefaultComponents() {
 }
 
 void Orchestrator::executeComponentLoop() {
+    // First, initialize any UNINITIALIZED components created via API
+    initializeUninitializedComponents();
+    
     int executedCount = executeReadyComponents();
     
     if (executedCount > 0) {
         log(Logger::DEBUG, String("Executed ") + executedCount + " components");
     } else {
-        // Force execute first component if nothing is executing  
+        // Force execute first component if nothing is executing AND components are truly stuck
         static int noExecCount = 0;
         noExecCount++;
         if (noExecCount > 100 && m_components.size() > 0) { // After 100 loops with no execution
-            log(Logger::WARNING, "No components executing - forcing first component");
-            if (m_components[0] && m_components[0]->getState() == ComponentState::READY) {
-                ExecutionResult result = m_components[0]->execute();
-                handleExecutionResult(m_components[0], result);
-                noExecCount = 0;
+            
+            // Check if any components are properly scheduled (not stuck)
+            bool anyComponentScheduled = false;
+            uint32_t currentTime = millis();
+            for (auto* component : m_components) {
+                if (component && component->getState() == ComponentState::READY && 
+                    component->getNextExecutionMs() > currentTime) {
+                    anyComponentScheduled = true;
+                    break;
+                }
             }
+            
+            // Only force execution if no components are properly scheduled
+            if (!anyComponentScheduled) {
+                log(Logger::WARNING, "No components executing and none scheduled - forcing first component");
+                if (m_components[0] && m_components[0]->getState() == ComponentState::READY) {
+                    ExecutionResult result = m_components[0]->execute();
+                    handleExecutionResult(m_components[0], result);
+                }
+            } else {
+                log(Logger::DEBUG, "No components ready to execute, but some are properly scheduled");
+            }
+            noExecCount = 0;
         }
     }
 }
@@ -882,6 +893,20 @@ bool Orchestrator::resumeExecutionLoop() {
     return true;
 }
 
+bool Orchestrator::scheduleRestart(uint32_t delaySeconds) {
+    if (!m_initialized) {
+        return false;
+    }
+    
+    uint32_t now = millis();
+    m_restartPending = true;
+    m_countdownStartTime = now;
+    m_restartTime = now + (delaySeconds * 1000);
+    
+    log(Logger::INFO, String("System restart scheduled in ") + delaySeconds + " seconds");
+    return true;
+}
+
 JsonDocument Orchestrator::getExecutionLoopConfig() const {
     JsonDocument config;
     
@@ -929,4 +954,49 @@ bool Orchestrator::updateExecutionLoopConfig(const JsonDocument& config) {
     m_storage.saveExecutionLoopConfig(getExecutionLoopConfig());
     
     return true;
+}
+
+void Orchestrator::initializeUninitializedComponents() {
+    for (auto* component : m_components) {
+        if (!component) continue;
+        
+        // Check if component is in UNINITIALIZED state (created via API)
+        if (component->getState() == ComponentState::UNINITIALIZED) {
+            log(Logger::INFO, "🔄 [ORCHESTRATOR] Initializing API-created component: " + component->getId());
+            
+            // Load the configuration that was saved during API creation
+            JsonDocument config;
+            if (m_storage.loadComponentConfig(component->getId(), config)) {
+                log(Logger::INFO, "🔄 [ORCHESTRATOR] Loaded config for: " + component->getId());
+                
+                // Initialize the component with the loaded configuration
+                if (component->initialize(config)) {
+                    log(Logger::INFO, "✅ [ORCHESTRATOR] Successfully initialized: " + component->getId());
+                    
+                    // Save the fully initialized configuration back to storage
+                    if (component->saveCurrentConfiguration()) {
+                        log(Logger::INFO, "💾 [ORCHESTRATOR] Configuration saved for: " + component->getId());
+                    } else {
+                        log(Logger::WARNING, "⚠️ [ORCHESTRATOR] Failed to save config for: " + component->getId());
+                    }
+                } else {
+                    log(Logger::ERROR, "❌ [ORCHESTRATOR] Failed to initialize: " + component->getId() + 
+                                       " - " + component->getLastError());
+                    component->setState(ComponentState::ERROR);
+                }
+            } else {
+                log(Logger::WARNING, "⚠️ [ORCHESTRATOR] No stored config found for: " + component->getId() + 
+                                     " - using defaults");
+                
+                // Try to initialize with default configuration
+                if (component->initialize(JsonDocument())) {
+                    log(Logger::INFO, "✅ [ORCHESTRATOR] Initialized with defaults: " + component->getId());
+                    component->saveCurrentConfiguration();
+                } else {
+                    log(Logger::ERROR, "❌ [ORCHESTRATOR] Failed default initialization: " + component->getId());
+                    component->setState(ComponentState::ERROR);
+                }
+            }
+        }
+    }
 }

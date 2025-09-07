@@ -225,6 +225,11 @@ void WebServerComponent::setupAPIEndpoints() {
         handleSystemStatus(request);
     });
     
+    // System restart endpoint
+    m_webServer->on("/api/system/restart", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        handleSystemRestart(request);
+    });
+    
     // IMPORTANT: MORE SPECIFIC ROUTES MUST BE REGISTERED FIRST!
     
     // Execution loop control endpoints
@@ -307,6 +312,16 @@ void WebServerComponent::setupAPIEndpoints() {
         handleMemoryInfo(request);
     });
     
+    // LittleFS debug endpoint
+    m_webServer->on("/api/debug/littlefs", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        handleLittleFSDebug(request);
+    });
+    
+    // Direct config file read endpoint
+    m_webServer->on("/api/debug/config-file", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        handleDirectConfigFileRead(request);
+    });
+    
     // Light sweep test endpoints
     m_webServer->on("/api/light/sweep/start", HTTP_POST, [this](AsyncWebServerRequest* request) {
         // handleSweepTestStart(request); // Disabled to save memory
@@ -346,6 +361,11 @@ void WebServerComponent::setupAPIEndpoints() {
     
     m_webServer->on("/api/components/{component_id}/actions/{action_name}", HTTP_POST, [this](AsyncWebServerRequest* request) {
         handleComponentActionExecute(request);
+    });
+    
+    // DEBUG: WebServer timing debug endpoint
+    m_webServer->on("/api/debug/webserver-timing", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        handleWebServerTimingDebug(request);
     });
 }
 
@@ -399,6 +419,7 @@ ExecutionResult WebServerComponent::execute() {
     ExecutionResult result;
     uint32_t startTime = millis();
     
+    
     setState(ComponentState::EXECUTING);
     
     // Prepare output data
@@ -423,6 +444,9 @@ ExecutionResult WebServerComponent::execute() {
     result.data = data;
     result.executionTimeMs = millis() - startTime;
     
+    // CRITICAL: Update execution statistics to prevent first-run loop
+    updateExecutionStats();
+    
     setState(ComponentState::READY);
     return result;
 }
@@ -444,6 +468,47 @@ void WebServerComponent::handleSystemStatus(AsyncWebServerRequest* request) {
     serializeJson(status, response);
     
     AsyncWebServerResponse* resp = request->beginResponse(200, "application/json", response);
+    if (m_enableCORS) setCORSHeaders(resp);
+    request->send(resp);
+}
+
+void WebServerComponent::handleSystemRestart(AsyncWebServerRequest* request) {
+    logRequest(request);
+    
+    JsonDocument response;
+    
+    if (!m_orchestrator) {
+        response["success"] = false;
+        response["error"] = "Orchestrator not available";
+        
+        AsyncWebServerResponse* resp = request->beginResponse(500, "application/json", response.as<String>());
+        if (m_enableCORS) setCORSHeaders(resp);
+        request->send(resp);
+        return;
+    }
+    
+    // Parse delay parameter (optional, defaults to 3 seconds)
+    uint32_t delaySeconds = 3;
+    if (request->hasParam("delay")) {
+        delaySeconds = request->getParam("delay")->value().toInt();
+        if (delaySeconds < 1) delaySeconds = 1;        // Minimum 1 second
+        if (delaySeconds > 30) delaySeconds = 30;      // Maximum 30 seconds
+    }
+    
+    // Schedule the restart
+    bool success = m_orchestrator->scheduleRestart(delaySeconds);
+    
+    if (success) {
+        response["success"] = true;
+        response["message"] = "System restart scheduled";
+        response["delay_seconds"] = delaySeconds;
+        log(Logger::INFO, "System restart requested via API (delay: " + String(delaySeconds) + "s)");
+    } else {
+        response["success"] = false;
+        response["error"] = "Failed to schedule restart";
+    }
+    
+    AsyncWebServerResponse* resp = request->beginResponse(success ? 200 : 500, "application/json", response.as<String>());
     if (m_enableCORS) setCORSHeaders(resp);
     request->send(resp);
 }
@@ -1025,6 +1090,139 @@ void WebServerComponent::handleMemoryInfo(AsyncWebServerRequest* request) {
     serializeJson(memInfo, response);
     
     AsyncWebServerResponse* resp = request->beginResponse(200, "application/json", response);
+    if (m_enableCORS) setCORSHeaders(resp);
+    request->send(resp);
+}
+
+void WebServerComponent::handleLittleFSDebug(AsyncWebServerRequest* request) {
+    logRequest(request);
+    
+    JsonDocument fsInfo;
+    
+    // LittleFS basic info
+    fsInfo["total_bytes"] = LittleFS.totalBytes();
+    fsInfo["used_bytes"] = LittleFS.usedBytes();
+    fsInfo["free_bytes"] = LittleFS.totalBytes() - LittleFS.usedBytes();
+    
+    // List all files in root directory
+    JsonArray files = fsInfo["files"].to<JsonArray>();
+    File root = LittleFS.open("/", "r");
+    if (root && root.isDirectory()) {
+        File file = root.openNextFile();
+        while (file) {
+            JsonDocument fileInfo;
+            fileInfo["name"] = String(file.name());
+            fileInfo["size"] = file.size();
+            fileInfo["is_directory"] = file.isDirectory();
+            files.add(fileInfo);
+            file = root.openNextFile();
+        }
+        root.close();
+    }
+    
+    // Check components directory specifically
+    JsonArray componentsFiles = fsInfo["components_directory"].to<JsonArray>();
+    File componentsDir = LittleFS.open("/config/components", "r");
+    if (componentsDir && componentsDir.isDirectory()) {
+        File componentFile = componentsDir.openNextFile();
+        while (componentFile) {
+            JsonDocument componentInfo;
+            componentInfo["name"] = String(componentFile.name());
+            componentInfo["size"] = componentFile.size();
+            componentInfo["is_directory"] = componentFile.isDirectory();
+            if (!componentFile.isDirectory() && String(componentFile.name()).endsWith(".json")) {
+                // Read content for JSON files
+                String content = componentFile.readString();
+                componentInfo["content"] = content;
+            }
+            componentsFiles.add(componentInfo);
+            componentFile = componentsDir.openNextFile();
+        }
+        componentsDir.close();
+    }
+    
+    // Get specific config files content if they exist
+    JsonArray configContents = fsInfo["config_contents"].to<JsonArray>();
+    
+    // Check for TSL2561Component config
+    File tslConfig = LittleFS.open("/config/TSL2561Component.json", "r");
+    if (tslConfig) {
+        JsonDocument configData;
+        configData["component"] = "TSL2561Component";
+        configData["size"] = tslConfig.size();
+        String content = tslConfig.readString();
+        configData["content"] = content;
+        configContents.add(configData);
+        tslConfig.close();
+    }
+    
+    // Check for any other .json files in config directory
+    File configDir = LittleFS.open("/config", "r");
+    if (configDir && configDir.isDirectory()) {
+        File configFile = configDir.openNextFile();
+        while (configFile) {
+            if (String(configFile.name()).endsWith(".json") && 
+                String(configFile.name()) != "TSL2561Component.json") {
+                JsonDocument configData;
+                configData["component"] = String(configFile.name());
+                configData["size"] = configFile.size();
+                String content = configFile.readString();
+                configData["content"] = content;
+                configContents.add(configData);
+            }
+            configFile = configDir.openNextFile();
+        }
+        configDir.close();
+    }
+    
+    String response;
+    serializeJson(fsInfo, response);
+    
+    AsyncWebServerResponse* resp = request->beginResponse(200, "application/json", response);
+    if (m_enableCORS) setCORSHeaders(resp);
+    request->send(resp);
+}
+
+void WebServerComponent::handleDirectConfigFileRead(AsyncWebServerRequest* request) {
+    logRequest(request);
+    
+    String componentId = "tsl2561-remote"; // Default to TSL2561 for our test
+    if (request->hasParam("component_id")) {
+        componentId = request->getParam("component_id")->value();
+    }
+    
+    String filePath = "/config/components/" + componentId + ".json";
+    
+    JsonDocument response;
+    response["component_id"] = componentId;
+    response["file_path"] = filePath;
+    
+    // Try to read the file directly
+    File configFile = LittleFS.open(filePath, "r");
+    if (configFile) {
+        response["file_exists"] = true;
+        response["file_size"] = configFile.size();
+        String content = configFile.readString();
+        response["raw_content"] = content;
+        configFile.close();
+        
+        // Try to parse as JSON
+        JsonDocument parsedContent;
+        DeserializationError error = deserializeJson(parsedContent, content);
+        if (error) {
+            response["parse_error"] = String(error.c_str());
+        } else {
+            response["parsed_json"] = parsedContent;
+        }
+    } else {
+        response["file_exists"] = false;
+        response["error"] = "File not found or could not be opened";
+    }
+    
+    String responseStr;
+    serializeJson(response, responseStr);
+    
+    AsyncWebServerResponse* resp = request->beginResponse(200, "application/json", responseStr);
     if (m_enableCORS) setCORSHeaders(resp);
     request->send(resp);
 }
@@ -1893,7 +2091,11 @@ void WebServerComponent::handleComponentAdd(AsyncWebServerRequest* request) {
     
     if (componentId.isEmpty()) {
         response["success"] = false;
-        response["error"] = "Invalid component ID";
+        response["error"] = "Component ID parameter missing. Required format: ?id=your-component-id&ComponentTypeID=TSL2561";
+        response["expected_parameters"] = JsonArray();
+        response["expected_parameters"][0] = "id (required): Unique component identifier";
+        response["expected_parameters"][1] = "ComponentTypeID (required): TSL2561, DHT22, or PeristalticPump";
+        response["expected_parameters"][2] = "remote_ip (optional): Target IP for remote sensors";
         request->send(400, "application/json", response.as<String>());
         return;
     }
@@ -1901,7 +2103,11 @@ void WebServerComponent::handleComponentAdd(AsyncWebServerRequest* request) {
     // Validate ComponentTypeID parameter
     if (!request->hasParam("ComponentTypeID")) {
         response["success"] = false;
-        response["error"] = "ComponentTypeID parameter required";
+        response["error"] = "ComponentTypeID parameter missing. Required format: ?id=your-component-id&ComponentTypeID=TSL2561";
+        response["supported_types"] = JsonArray();
+        response["supported_types"][0] = "TSL2561 (Light sensor)";
+        response["supported_types"][1] = "DHT22 (Temperature/Humidity sensor)";
+        response["supported_types"][2] = "PeristalticPump (Pump control)";
         request->send(400, "application/json", response.as<String>());
         return;
     }
@@ -1954,74 +2160,46 @@ void WebServerComponent::handleComponentAdd(AsyncWebServerRequest* request) {
         return;
     }
     
-    // Step 3: Get default schema and validate it
-    JsonDocument defaultSchema = newComponent->getDefaultSchema();
-    if (defaultSchema.isNull()) {
-        delete newComponent;
-        response["success"] = false;
-        response["error"] = "Component has invalid default schema";
-        request->send(500, "application/json", response.as<String>());
-        return;
-    }
+    // Step 3: Create minimal default configuration (avoid complex schema processing)
+    JsonDocument defaultConfig;
     
-    // Step 4: Parse any additional configuration from request
-    JsonDocument configOverrides;
+    // Add required component_type field for orchestrator loading
+    defaultConfig["component_type"] = componentType;
     
-    // Check request body for JSON config
-    if (request->hasParam("body", true)) {
-        String body = request->getParam("body", true)->value();
-        DeserializationError error = deserializeJson(configOverrides, body);
-        if (error) {
-            delete newComponent;
-            response["success"] = false;
-            response["error"] = "Invalid JSON in request body";
-            request->send(400, "application/json", response.as<String>());
-            return;
+    // Set component-specific defaults based on type
+    if (componentType == "TSL2561" || componentType == "LightSensor") {
+        // TSL2561 defaults - minimal configuration for remote sensor
+        defaultConfig["useRemoteSensor"] = true;
+        defaultConfig["remoteHost"] = "192.168.1.150";  // Default remote host
+        defaultConfig["remotePort"] = 80;
+        defaultConfig["remotePath"] = "/light";
+        defaultConfig["httpTimeoutMs"] = 5000;
+        defaultConfig["samplingIntervalMs"] = 10000;
+        
+        // Override with any provided remote_ip parameter
+        if (request->hasParam("remote_ip")) {
+            defaultConfig["remoteHost"] = request->getParam("remote_ip")->value();
         }
-    } else {
-        // Parse URL parameters as config overrides
-        for (int i = 0; i < request->params(); i++) {
-            const AsyncWebParameter* param = request->getParam(i);
-            if (param->name() != "ComponentTypeID") {
-                configOverrides[param->name()] = param->value();
-            }
-        }
+    } else if (componentType == "DHT22" || componentType == "TemperatureSensor") {
+        // DHT22 defaults
+        defaultConfig["pin"] = 2;
+        defaultConfig["samplingIntervalMs"] = 5000;
+    } else if (componentType == "PeristalticPump" || componentType == "Pump") {
+        // Pump defaults
+        defaultConfig["pumpPin"] = 26;
+        defaultConfig["mlPerSecond"] = 40.0;
+        defaultConfig["maxRuntimeMs"] = 60000;
     }
     
-    // Step 5: Merge default config with overrides - use simple approach to avoid timeout
-    JsonDocument finalConfig;
+    // Step 4: SKIP full initialization to prevent memory crashes
+    // Just set the component to CREATED state - orchestrator will initialize during execution
+    // This avoids complex JSON processing, schema validation, and memory exhaustion
     
-    // Start with defaults from schema properties
-    if (defaultSchema["properties"]) {
-        JsonObject properties = defaultSchema["properties"];
-        for (JsonPair prop : properties) {
-            if (prop.value()["default"]) {
-                finalConfig[prop.key().c_str()] = prop.value()["default"];
-            }
-        }
-    }
+    // Set basic state without calling initialize()
+    newComponent->setState(ComponentState::UNINITIALIZED);  
     
-    // Apply overrides
-    if (!configOverrides.isNull() && configOverrides.size() > 0) {
-        for (JsonPair override : configOverrides.as<JsonObject>()) {
-            finalConfig[override.key().c_str()] = override.value();
-        }
-    }
-    
-    // Set useRemoteSensor=false for local sensor if not specified
-    if (finalConfig["useRemoteSensor"].isNull()) {
-        finalConfig["useRemoteSensor"] = false;
-    }
-    
-    // Step 6: Initialize component with final configuration
-    if (!newComponent->initialize(finalConfig)) {
-        delete newComponent;
-        response["success"] = false;
-        response["error"] = "Failed to initialize component with provided configuration";
-        response["last_error"] = newComponent->getLastError();
-        request->send(500, "application/json", response.as<String>());
-        return;
-    }
+    // Store the minimal config directly without processing
+    // The component will be properly initialized by orchestrator later
     
     // Step 7: Register component with orchestrator
     if (!m_orchestrator->registerComponent(newComponent)) {
@@ -2032,10 +2210,38 @@ void WebServerComponent::handleComponentAdd(AsyncWebServerRequest* request) {
         return;
     }
     
-    // Step 8: Save configuration to persistent storage
-    if (!newComponent->saveCurrentConfiguration()) {
+    // Step 8: Save minimal configuration directly to storage (bypass component methods)
+    log(Logger::INFO, "🔥 [API-SAVE] Attempting to save config for: " + componentId);
+    
+    // Debug: Log what we're trying to save
+    String debugConfig;
+    serializeJson(defaultConfig, debugConfig);
+    log(Logger::INFO, "🔥 [API-SAVE] Config to save: " + debugConfig);
+    
+    if (!m_storage.saveComponentConfig(componentId, defaultConfig)) {
         // Component is registered but config not persisted - warn but don't fail
-        log(Logger::WARNING, "Component created but configuration not persisted: " + componentId);
+        log(Logger::ERROR, "🔥 [API-SAVE] FAILED to save configuration for: " + componentId);
+    } else {
+        log(Logger::INFO, "🔥 [API-SAVE] SUCCESS saved configuration for: " + componentId);
+        
+        // VERIFICATION: Immediately try to read back the saved config
+        log(Logger::INFO, "🔍 [API-VERIFY] Verifying saved config can be read back...");
+        JsonDocument verifyConfig;
+        if (m_storage.loadComponentConfig(componentId, verifyConfig)) {
+            String verifyConfigStr;
+            serializeJson(verifyConfig, verifyConfigStr);
+            log(Logger::INFO, "✅ [API-VERIFY] SUCCESS - Config verified: " + verifyConfigStr);
+            
+            // Double-check the file actually exists on filesystem
+            String expectedPath = "/config/components/" + componentId + ".json";
+            if (LittleFS.exists(expectedPath)) {
+                log(Logger::INFO, "✅ [API-VERIFY] File confirmed to exist at: " + expectedPath);
+            } else {
+                log(Logger::ERROR, "❌ [API-VERIFY] CRITICAL: File does NOT exist at: " + expectedPath);
+            }
+        } else {
+            log(Logger::ERROR, "❌ [API-VERIFY] FAILED to read back saved config for: " + componentId);
+        }
     }
     
     // Step 9: Success response
@@ -2044,7 +2250,7 @@ void WebServerComponent::handleComponentAdd(AsyncWebServerRequest* request) {
     response["component_id"] = componentId;
     response["component_type"] = componentType;
     response["component_state"] = newComponent->getStateString();
-    response["final_configuration"] = finalConfig;
+    response["default_configuration"] = defaultConfig;
     
     String responseJson;
     serializeJson(response, responseJson);
@@ -2553,4 +2759,41 @@ String WebServerComponent::getContentType(const String& filename) {
     else if (filename.endsWith(".gz")) return "application/gzip";
     else if (filename.endsWith(".txt")) return "text/plain";
     return "application/octet-stream";
+}
+
+void WebServerComponent::handleWebServerTimingDebug(AsyncWebServerRequest* request) {
+    logRequest(request);
+    
+    uint32_t currentTime = millis();
+    uint32_t nextExecTime = getNextExecutionMs();
+    
+    JsonDocument response;
+    response["component_id"] = getId();
+    response["component_type"] = getType();
+    response["current_state"] = getStateString();
+    response["current_time_ms"] = currentTime;
+    response["next_execution_ms"] = nextExecTime;
+    response["last_execution_ms"] = m_lastExecutionMs;
+    response["execution_count"] = m_executionCount;
+    response["time_until_next_exec"] = (int32_t)(nextExecTime - currentTime);
+    response["is_ready_to_execute"] = isReadyToExecute();
+    response["never_executed"] = (m_executionCount == 0);
+    response["state_ready"] = (getState() == ComponentState::READY);
+    response["time_ready"] = (currentTime >= nextExecTime);
+    
+    // DEBUG: Add detailed timing breakdown
+    response["debug_current_time"] = currentTime;
+    response["debug_next_execution"] = nextExecTime;
+    response["debug_time_comparison"] = (currentTime >= nextExecTime);
+    response["debug_state_check"] = (getState() == ComponentState::READY);
+    response["debug_never_executed_check"] = (m_executionCount == 0);
+    response["debug_full_ready_logic"] = ((getState() == ComponentState::READY) && (m_executionCount == 0)) || 
+                                        ((getState() == ComponentState::READY) && (currentTime >= nextExecTime));
+    
+    String responseStr;
+    serializeJson(response, responseStr);
+    
+    AsyncWebServerResponse* resp = request->beginResponse(200, "application/json", responseStr);
+    if (m_enableCORS) setCORSHeaders(resp);
+    request->send(resp);
 }

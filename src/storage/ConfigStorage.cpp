@@ -50,26 +50,55 @@ bool ConfigStorage::init() {
 
 bool ConfigStorage::saveComponentConfig(const String& componentId, const JsonDocument& config) {
     if (!m_initialized) {
-        Logger::error("ConfigStorage", "Storage not initialized");
+        Logger::error("ConfigStorage", "❌ [STORAGE] Storage not initialized");
         return false;
     }
     
     String filePath = getComponentConfigPath(componentId);
-    log("Saving component config: " + componentId + " -> " + filePath);
+    Logger::info("ConfigStorage", "💾 [STORAGE-SAVE] Saving: " + componentId + " -> " + filePath);
     
-    return saveJsonToFile(filePath, config);
+    // Log the content being saved
+    String configStr;
+    serializeJson(config, configStr);
+    Logger::info("ConfigStorage", "💾 [STORAGE-SAVE] Content: " + configStr);
+    
+    bool result = saveJsonToFile(filePath, config);
+    
+    if (result) {
+        Logger::info("ConfigStorage", "✅ [STORAGE-SAVE] Successfully wrote: " + filePath);
+    } else {
+        Logger::error("ConfigStorage", "❌ [STORAGE-SAVE] Failed to write: " + filePath);
+    }
+    
+    return result;
 }
 
 bool ConfigStorage::loadComponentConfig(const String& componentId, JsonDocument& config) {
     if (!m_initialized) {
-        Logger::error("ConfigStorage", "Storage not initialized");
+        Logger::error("ConfigStorage", "❌ [STORAGE] Storage not initialized");
         return false;
     }
     
     String filePath = getComponentConfigPath(componentId);
-    log("Loading component config: " + componentId + " <- " + filePath);
+    Logger::info("ConfigStorage", "📂 [STORAGE-LOAD] Loading: " + componentId + " <- " + filePath);
     
-    return loadJsonFromFile(filePath, config);
+    // Check if file exists
+    if (!fileExists(filePath)) {
+        Logger::warning("ConfigStorage", "⚠️ [STORAGE-LOAD] File does not exist: " + filePath);
+        return false;
+    }
+    
+    bool result = loadJsonFromFile(filePath, config);
+    
+    if (result) {
+        String loadedStr;
+        serializeJson(config, loadedStr);
+        Logger::info("ConfigStorage", "✅ [STORAGE-LOAD] Successfully loaded: " + loadedStr);
+    } else {
+        Logger::error("ConfigStorage", "❌ [STORAGE-LOAD] Failed to parse JSON from: " + filePath);
+    }
+    
+    return result;
 }
 
 bool ConfigStorage::hasComponentConfig(const String& componentId) {
@@ -147,22 +176,26 @@ std::vector<String> ConfigStorage::listComponentConfigs() {
     
     if (!m_initialized) return configs;
     
-    File root = LittleFS.open("/");
-    File file = root.openNextFile();
+    // Open the components directory directly instead of root
+    File componentsDir = LittleFS.open(COMPONENT_CONFIG_PATH);
+    if (!componentsDir || !componentsDir.isDirectory()) {
+        // Components directory doesn't exist or isn't a directory
+        return configs;
+    }
     
-    String configPrefix = String(COMPONENT_CONFIG_PATH) + "/";
+    File file = componentsDir.openNextFile();
     
     while (file) {
         String fileName = file.name();
-        if (fileName.startsWith(configPrefix) && fileName.endsWith(".json")) {
-            // Extract component ID from filename
-            String componentId = fileName.substring(configPrefix.length());
-            componentId = componentId.substring(0, componentId.length() - 5);  // Remove .json
+        if (!file.isDirectory() && fileName.endsWith(".json")) {
+            // Extract component ID from filename (remove .json extension)
+            String componentId = fileName.substring(0, fileName.length() - 5);
             configs.push_back(componentId);
         }
-        file = root.openNextFile();
+        file = componentsDir.openNextFile();
     }
     
+    componentsDir.close();
     return configs;
 }
 
@@ -238,42 +271,104 @@ bool ConfigStorage::formatStorage() {
 // Private methods
 
 bool ConfigStorage::saveJsonToFile(const String& filePath, const JsonDocument& doc) {
+    Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] Starting saveJsonToFile for: " + filePath);
+    
+    // Check if LittleFS is mounted
+    if (!LittleFS.begin()) {
+        Logger::error("ConfigStorage", "🔍 [SAVE-DEBUG] CRITICAL: LittleFS not mounted!");
+        return false;
+    }
+    
+    // Test JSON document validity
+    if (doc.isNull()) {
+        Logger::error("ConfigStorage", "🔍 [SAVE-DEBUG] ERROR: JsonDocument is null!");
+        return false;
+    }
+    
+    size_t docSize = measureJson(doc);
+    Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] JSON size: " + String(docSize) + " bytes");
+    
+    // Debug JSON content (limited to prevent memory issues)
+    if (docSize < 500) {
+        String debugJson;
+        serializeJson(doc, debugJson);
+        Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] JSON content: " + debugJson);
+    }
+    
     // Ensure directory exists by creating parent directories
     String dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+    Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] Target directory: " + dirPath);
+    
     if (dirPath.length() > 0) {
-        // Create directory if it doesn't exist
-        if (!LittleFS.exists(dirPath)) {
+        // Check if directory exists
+        if (LittleFS.exists(dirPath)) {
+            Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] Directory already exists: " + dirPath);
+        } else {
+            Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] Creating directory: " + dirPath);
             if (!LittleFS.mkdir(dirPath)) {
+                Logger::error("ConfigStorage", "🔍 [SAVE-DEBUG] Failed to create directory: " + dirPath);
+                
                 // Try creating parent directories recursively
+                Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] Attempting recursive directory creation");
                 int lastSlash = dirPath.lastIndexOf('/');
                 while (lastSlash > 0) {
                     String parentDir = dirPath.substring(0, lastSlash);
                     if (!LittleFS.exists(parentDir)) {
+                        Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] Creating parent: " + parentDir);
                         LittleFS.mkdir(parentDir);
                     }
                     lastSlash = dirPath.lastIndexOf('/', lastSlash - 1);
                 }
                 // Try creating the directory again
+                Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] Retrying directory creation: " + dirPath);
                 LittleFS.mkdir(dirPath);
+            } else {
+                Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] Directory created successfully: " + dirPath);
             }
         }
     }
     
+    // Attempt to open file for writing
+    Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] Opening file for write: " + filePath);
     File file = LittleFS.open(filePath, "w");
     if (!file) {
-        Logger::error("ConfigStorage", "Failed to create file: " + filePath);
+        Logger::error("ConfigStorage", "🔍 [SAVE-DEBUG] FAILED to open file for writing: " + filePath);
+        
+        // Additional debugging - check available space
+        size_t totalBytes = LittleFS.totalBytes();
+        size_t usedBytes = LittleFS.usedBytes();
+        Logger::error("ConfigStorage", "🔍 [SAVE-DEBUG] LittleFS space - Total: " + String(totalBytes) + ", Used: " + String(usedBytes) + ", Free: " + String(totalBytes - usedBytes));
+        
         return false;
     }
     
+    Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] File opened successfully, writing JSON...");
     size_t bytesWritten = serializeJson(doc, file);
     file.close();
     
+    Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] Bytes written: " + String(bytesWritten));
+    
     if (bytesWritten == 0) {
-        Logger::error("ConfigStorage", "Failed to write JSON to file: " + filePath);
+        Logger::error("ConfigStorage", "🔍 [SAVE-DEBUG] ERROR: Zero bytes written to file!");
         return false;
     }
     
-    Logger::debug("ConfigStorage", "Saved " + String(bytesWritten) + " bytes to " + filePath);
+    // Verify file was actually created and has content
+    if (LittleFS.exists(filePath)) {
+        File verifyFile = LittleFS.open(filePath, "r");
+        if (verifyFile) {
+            size_t fileSize = verifyFile.size();
+            verifyFile.close();
+            Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] SUCCESS: File verified, size: " + String(fileSize) + " bytes");
+        } else {
+            Logger::error("ConfigStorage", "🔍 [SAVE-DEBUG] ERROR: File exists but cannot be opened for verification");
+        }
+    } else {
+        Logger::error("ConfigStorage", "🔍 [SAVE-DEBUG] ERROR: File does not exist after write operation!");
+        return false;
+    }
+    
+    Logger::info("ConfigStorage", "🔍 [SAVE-DEBUG] saveJsonToFile completed successfully for: " + filePath);
     return true;
 }
 

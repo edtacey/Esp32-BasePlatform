@@ -5,6 +5,7 @@
 
 #include "BaseComponent.h"
 #include "../core/Orchestrator.h"
+#include <LittleFS.h>
 
 BaseComponent::BaseComponent(const String& id, const String& type, const String& name, ConfigStorage& storage, Orchestrator* orchestrator)
     : m_componentId(id)
@@ -17,7 +18,45 @@ BaseComponent::BaseComponent(const String& id, const String& type, const String&
 }
 
 bool BaseComponent::loadConfiguration(const JsonDocument& config) {
-    log(Logger::INFO, "Loading configuration for " + m_componentId);
+    log(Logger::INFO, "🔥 [BOOT-TRACE] ==================== LOADING CONFIG FOR " + m_componentId + " ====================");
+    
+    // STEP 0: Check if LittleFS is ready and mounted
+    log(Logger::INFO, "🔥 [BOOT-TRACE] Checking LittleFS status...");
+    if (!LittleFS.begin()) {
+        log(Logger::ERROR, "🔥 [BOOT-TRACE] ❌ CRITICAL: LittleFS not mounted during component initialization!");
+        return false;
+    } else {
+        size_t totalBytes = LittleFS.totalBytes();
+        size_t usedBytes = LittleFS.usedBytes();
+        log(Logger::INFO, "🔥 [BOOT-TRACE] ✅ LittleFS is mounted and ready: " + String(usedBytes) + "/" + String(totalBytes) + " bytes used");
+    }
+    
+    // STEP 1: Check if config file already exists BEFORE we do anything
+    String configFilePath = "/config/components/" + m_componentId + ".json";
+    log(Logger::INFO, "🔥 [BOOT-TRACE] Checking for existing config file: " + configFilePath);
+    
+    File existingFile = LittleFS.open(configFilePath, "r");
+    if (existingFile) {
+        String existingContent = existingFile.readString();
+        existingFile.close();
+        log(Logger::INFO, "🔥 [BOOT-TRACE] ✅ EXISTING CONFIG FILE FOUND! Content: " + existingContent);
+        
+        // Parse and extract remoteHost if present
+        JsonDocument existingConfig;
+        if (deserializeJson(existingConfig, existingContent) == DeserializationError::Ok) {
+            if (existingConfig.containsKey("remoteHost")) {
+                String existingRemoteHost = existingConfig["remoteHost"].as<String>();
+                log(Logger::INFO, "🔥 [BOOT-TRACE] EXISTING FILE remoteHost: '" + existingRemoteHost + "'");
+            }
+        }
+    } else {
+        log(Logger::INFO, "🔥 [BOOT-TRACE] No existing config file found - this will be a fresh initialization");
+    }
+    
+    // Log the incoming config parameter
+    String incomingConfigStr;
+    serializeJson(config, incomingConfigStr);
+    log(Logger::INFO, "🔥 [BOOT-TRACE] Incoming config parameter: " + incomingConfigStr);
     
     // Get default schema from derived class
     m_schema = getDefaultSchema();
@@ -27,44 +66,78 @@ bool BaseComponent::loadConfiguration(const JsonDocument& config) {
         return false;
     }
     
+    log(Logger::INFO, "🔥 [BOOT-TRACE] Schema loaded successfully");
+    
     // Step 1: Extract defaults from schema
     JsonDocument defaults = extractDefaultValues(m_schema);
     
-    // Debug: log extracted defaults
+    // Debug: log extracted defaults with remoteHost tracking
     String defaultsStr;
     serializeJson(defaults, defaultsStr);
-    log(Logger::DEBUG, "Extracted defaults: " + defaultsStr);
+    log(Logger::INFO, "🔥 [BOOT-TRACE] Extracted defaults: " + defaultsStr);
+    
+    // Track remoteHost specifically
+    if (defaults.containsKey("remoteHost")) {
+        String remoteHostDefault = defaults["remoteHost"].as<String>();
+        log(Logger::INFO, "🔥 [BOOT-TRACE] Schema default remoteHost: '" + remoteHostDefault + "'");
+    }
     
     if (defaults.isNull() || defaults.size() == 0) {
         setError("Failed to extract default values from schema");
         return false;
     }
     
-    // Step 2: Save defaults to storage for persistence validation
-    log(Logger::INFO, "Saving default configuration to validate persistence");
-    if (!saveConfigurationToStorage(defaults)) {
-        log(Logger::WARNING, "Failed to save defaults - continuing anyway");
+    // Step 2: *** CRITICAL FIX *** - Only save defaults if no config file exists
+    File checkFile = LittleFS.open(configFilePath, "r");
+    bool configFileExists = (bool)checkFile;
+    if (checkFile) checkFile.close();
+    
+    if (configFileExists) {
+        log(Logger::INFO, "🔥 [BOOT-TRACE] ✅ SKIPPING defaults save - existing config file found, preserving it!");
+    } else {
+        log(Logger::INFO, "🔥 [BOOT-TRACE] No existing config file - saving defaults for first-time setup");
+        if (!saveConfigurationToStorage(defaults)) {
+            log(Logger::WARNING, "🔥 [BOOT-TRACE] Failed to save defaults - continuing anyway");
+        } else {
+            log(Logger::INFO, "🔥 [BOOT-TRACE] ✅ Defaults saved to storage for first-time setup");
+        }
     }
     
     // Step 3: Attempt to reload from storage to validate save worked
-    log(Logger::INFO, "Reloading configuration to validate persistence");
+    log(Logger::INFO, "🔥 [BOOT-TRACE] Reloading configuration from storage...");
     JsonDocument storedConfig = loadConfigurationFromStorage();
+    
+    // Track remoteHost in stored config
+    if (!storedConfig.isNull() && storedConfig.containsKey("remoteHost")) {
+        String storedRemoteHost = storedConfig["remoteHost"].as<String>();
+        log(Logger::INFO, "🔥 [BOOT-TRACE] Stored config remoteHost: '" + storedRemoteHost + "'");
+    } else {
+        log(Logger::INFO, "🔥 [BOOT-TRACE] No remoteHost found in stored config or config is null");
+    }
     
     // Step 4: Choose configuration source
     if (config.isNull() || config.size() == 0) {
+        log(Logger::INFO, "🔥 [BOOT-TRACE] Incoming config is null/empty - choosing between stored and defaults");
         if (storedConfig.isNull() || storedConfig.size() == 0) {
-            log(Logger::INFO, "No stored config found - using extracted defaults");
+            log(Logger::INFO, "🔥 [BOOT-TRACE] ❌ OVERRIDE DETECTED: Using schema defaults (stored config null/empty)");
             m_configuration = defaults;
         } else {
-            log(Logger::INFO, "Using validated stored configuration");
+            log(Logger::INFO, "🔥 [BOOT-TRACE] ✅ Using stored configuration from LittleFS");
             m_configuration = storedConfig;
         }
     } else {
+        // Track remoteHost in incoming config
+        if (config.containsKey("remoteHost")) {
+            String incomingRemoteHost = config["remoteHost"].as<String>();
+            log(Logger::INFO, "🔥 [BOOT-TRACE] Incoming config remoteHost: '" + incomingRemoteHost + "'");
+        }
+        
         // Merge provided config with defaults
-        log(Logger::INFO, "Merging provided configuration with defaults");
+        log(Logger::INFO, "🔥 [BOOT-TRACE] ❌ OVERRIDE DETECTED: Merging incoming config with defaults (ignoring stored)");
         m_configuration = mergeConfiguration(defaults, config);
         
         // Save the merged config
+        log(Logger::INFO, "🔥 [BOOT-TRACE] Saving merged configuration to storage");
         saveConfigurationToStorage(m_configuration);
     }
     
@@ -77,7 +150,13 @@ bool BaseComponent::loadConfiguration(const JsonDocument& config) {
     // Step 6: Log successful configuration with values
     String configStr;
     serializeJson(m_configuration, configStr);
-    log(Logger::INFO, "Configuration validated successfully: " + configStr);
+    log(Logger::INFO, "🔥 [BOOT-TRACE] Final configuration: " + configStr);
+    
+    // Track final remoteHost value
+    if (m_configuration.containsKey("remoteHost")) {
+        String finalRemoteHost = m_configuration["remoteHost"].as<String>();
+        log(Logger::INFO, "🔥 [BOOT-TRACE] FINAL remoteHost value: '" + finalRemoteHost + "'");
+    }
     
     return true;
 }
@@ -121,13 +200,17 @@ String BaseComponent::getStateString(ComponentState state) const {
 }
 
 bool BaseComponent::isReadyToExecute() const {
+    uint32_t currentTime = millis();
+    bool stateReady = (m_state == ComponentState::READY);
+    bool timeReady = (currentTime >= m_nextExecutionMs);
+    bool neverExecuted = (m_executionCount == 0);
+    
     // Force execution if never executed and component is ready
-    if (m_state == ComponentState::READY && m_executionCount == 0) {
+    if (stateReady && neverExecuted) {
         return true;
     }
     
-    return (m_state == ComponentState::READY) && 
-           (millis() >= m_nextExecutionMs);
+    return stateReady && timeReady;
 }
 
 void BaseComponent::clearError() {
@@ -239,15 +322,20 @@ JsonDocument BaseComponent::extractDefaultValues(const JsonDocument& schema) {
 }
 
 bool BaseComponent::saveConfigurationToStorage(const JsonDocument& config) {
-    log(Logger::INFO, "Saving configuration to storage");
+    log(Logger::INFO, "🔵 [SAVE] Saving configuration to storage for: " + m_componentId);
+    
+    // Log what we're saving
+    String configStr;
+    serializeJson(config, configStr);
+    log(Logger::INFO, "🔵 [SAVE] Configuration content: " + configStr);
     
     // Use ConfigStorage to save component configuration
     bool success = m_storage.saveComponentConfig(m_componentId, config);
     
     if (success) {
-        log(Logger::DEBUG, "Successfully saved configuration to storage");
+        log(Logger::INFO, "✅ [SAVE] Successfully saved configuration to storage: " + m_componentId);
     } else {
-        log(Logger::ERROR, "Failed to save configuration to storage");
+        log(Logger::ERROR, "❌ [SAVE] Failed to save configuration to storage: " + m_componentId);
     }
     
     return success;
@@ -256,15 +344,24 @@ bool BaseComponent::saveConfigurationToStorage(const JsonDocument& config) {
 JsonDocument BaseComponent::loadConfigurationFromStorage() {
     JsonDocument config;
     
-    log(Logger::INFO, "Loading configuration from storage");
+    log(Logger::INFO, "🔷 [LOAD] Loading configuration from storage for: " + m_componentId);
+    
+    // Check if config exists first
+    if (m_storage.hasComponentConfig(m_componentId)) {
+        log(Logger::INFO, "🔷 [LOAD] Found stored config file for: " + m_componentId);
+    } else {
+        log(Logger::WARNING, "⚠️ [LOAD] No stored config file exists for: " + m_componentId);
+    }
     
     // Use ConfigStorage to load component configuration
     bool success = m_storage.loadComponentConfig(m_componentId, config);
     
     if (success) {
-        log(Logger::DEBUG, "Successfully loaded configuration from storage");
+        String loadedStr;
+        serializeJson(config, loadedStr);
+        log(Logger::INFO, "✅ [LOAD] Successfully loaded config: " + loadedStr);
     } else {
-        log(Logger::DEBUG, "No stored configuration found (using defaults)");
+        log(Logger::WARNING, "⚠️ [LOAD] Failed to load config or file doesn't exist for: " + m_componentId);
     }
     
     return config;
@@ -288,11 +385,20 @@ bool BaseComponent::requestScheduleUpdate(const String& componentId, uint32_t ti
 // === Enhanced Configuration Persistence Implementation ===
 
 bool BaseComponent::saveCurrentConfiguration() {
-    log(Logger::INFO, "💾 Saving current configuration to persistent storage");
+    log(Logger::INFO, "🔥 [SAVE-TRACE] Starting saveCurrentConfiguration for: " + m_componentId);
     
     try {
         // Ask child class for its complete current state
+        log(Logger::INFO, "🔥 [SAVE-TRACE] Calling getCurrentConfig()...");
         JsonDocument currentConfig = getCurrentConfig();
+        
+        // Track remoteHost in current config before saving
+        if (currentConfig.containsKey("remoteHost")) {
+            String currentRemoteHost = currentConfig["remoteHost"].as<String>();
+            log(Logger::INFO, "🔥 [SAVE-TRACE] getCurrentConfig() returned remoteHost: '" + currentRemoteHost + "'");
+        } else {
+            log(Logger::INFO, "🔥 [SAVE-TRACE] getCurrentConfig() returned NO remoteHost field");
+        }
         
         if (currentConfig.isNull() || currentConfig.size() == 0) {
             log(Logger::WARNING, "⚠️ Child class returned empty configuration");
@@ -309,12 +415,13 @@ bool BaseComponent::saveCurrentConfiguration() {
         log(Logger::INFO, "📝 Saving config to storage: " + configStr);
         
         // Base class handles the storage operation
+        log(Logger::INFO, "🔥 [SAVE-TRACE] Calling m_storage.saveComponentConfig()...");
         bool success = m_storage.saveComponentConfig(m_componentId, currentConfig);
         
         if (success) {
-            log(Logger::INFO, "✅ Configuration saved successfully to LittleFS");
+            log(Logger::INFO, "🔥 [SAVE-TRACE] ✅ Configuration saved successfully to LittleFS");
         } else {
-            log(Logger::ERROR, "❌ Failed to save configuration to LittleFS");
+            log(Logger::ERROR, "🔥 [SAVE-TRACE] ❌ Failed to save configuration to LittleFS");
         }
         
         return success;

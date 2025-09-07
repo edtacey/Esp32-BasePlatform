@@ -50,6 +50,11 @@ private:
     
     // Execution loop control
     bool m_executionLoopPaused = false;
+    
+    // System restart control
+    bool m_restartPending = false;
+    uint32_t m_restartTime = 0;
+    uint32_t m_countdownStartTime = 0;
 
 public:
     /**
@@ -173,6 +178,13 @@ public:
     bool isExecutionLoopPaused() const { return m_executionLoopPaused; }
 
     /**
+     * @brief Schedule system restart with countdown
+     * @param delaySeconds Delay before restart (default: 3 seconds)
+     * @return true if restart scheduled successfully
+     */
+    bool scheduleRestart(uint32_t delaySeconds = 3);
+
+    /**
      * @brief Get execution loop configuration
      * @return Execution loop config as JSON
      */
@@ -259,6 +271,12 @@ private:
      * @return Number of components executed
      */
     int executeReadyComponents();
+
+    /**
+     * @brief Initialize any components in UNINITIALIZED state (created via API)
+     * This handles deferred initialization for components created through the API
+     */
+    void initializeUninitializedComponents();
 
     /**
      * @brief Handle component execution result

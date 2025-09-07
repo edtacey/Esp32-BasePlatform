@@ -73,11 +73,14 @@ private:
     
     // API endpoint handlers
     void handleSystemStatus(AsyncWebServerRequest* request);
+    void handleSystemRestart(AsyncWebServerRequest* request);
     void handleComponentData(AsyncWebServerRequest* request);
     void handleComponentList(AsyncWebServerRequest* request);
     void handleLogs(AsyncWebServerRequest* request);
     void handleLogFile(AsyncWebServerRequest* request);
     void handleMemoryInfo(AsyncWebServerRequest* request);
+    void handleLittleFSDebug(AsyncWebServerRequest* request);
+    void handleDirectConfigFileRead(AsyncWebServerRequest* request);
     void handleComponentsMqtt(AsyncWebServerRequest* request);
     void handleComponentsDebug(AsyncWebServerRequest* request);
     void handleSweepTestStart(AsyncWebServerRequest* request);
@@ -98,6 +101,7 @@ private:
     void handleExecutionLoopResume(AsyncWebServerRequest* request);
     void handleExecutionLoopConfig(AsyncWebServerRequest* request);
     void handleExecutionLoopConfigUpdate(AsyncWebServerRequest* request);
+    void handleWebServerTimingDebug(AsyncWebServerRequest* request);
     
     // Web page handlers  
     void handleHomePage(AsyncWebServerRequest* request);
